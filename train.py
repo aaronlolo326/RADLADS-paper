@@ -168,12 +168,13 @@ if __name__ == "__main__":
 
     from src.lit import LightningModelWrapper
     from src.model import Transformer
-    from qwen2.configuration_qwen2 import Qwen2Config
+    # from qwen2.configuration_qwen2 import Qwen2Config
+    from transformers import Qwen2Config
 
     from safetensors.torch import load_file
 
     # NOTE - this import MUST come AFTER the JIT gets disabled above or that disabling won't take effect correctly for the model
-    import models.qwen2
+    # import models.qwen2
 
     strategy_obj = config.train.strategy
     if 'fsdp' in config.train.strategy:
@@ -289,6 +290,7 @@ if __name__ == "__main__":
             model = load_and_patch_model_with_attention_replacement(hf_path, config.model.attn_classes_path, ReplacementSelfAttnType, attention_distillation_stage)
         elif classname != '':
             model_classpath = f'models.{classname}.Model_{classname}'
+            breakpoint()
             model_factory = locate(model_classpath)
             if model_factory is None:
                 print(f"Unsupported model type: {model_classpath}")
