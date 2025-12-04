@@ -6,6 +6,7 @@
 #
 import os, sys, types, json, math, time
 import numpy as np
+from pprint import pprint
 np.set_printoptions(precision=4, suppress=True, linewidth=200)
 
 #import transformers # just for a bugfix for 0.4.2 of lm_eval
@@ -31,6 +32,9 @@ from transformers.modeling_utils import load_state_dict, load_sharded_checkpoint
 from lm_eval import tasks, evaluator, utils
 from lm_eval.api.model import TemplateLM
 
+import datasets
+datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
+
 from tqdm import tqdm
 
 ########################################################################################################
@@ -48,23 +52,49 @@ class CLI_Config:
     seed: int | None = None
     recurrent: int = 1
     train:typing.Any = None
-    model: Model_Config
+    model: Model_Config | None = None
+    is_pretrained: str = "no"
+    tokenizer_name: str | None = None
 
 config, errors = parse_cmdline_configs(sys.argv[1:], CLI_Config)
 if errors != '':
     print(errors)
     exit()
-config.train = None # to avoid clashes with training configs
-
-os.environ["RWKV_MODEL_TYPE"] = config.model.tmix
-os.environ["RWKV_CTXLEN"] = str(config.model.ctx_len)
-os.environ["RWKV_HEAD_SIZE_A"] = str(config.model.head_size)
-attention_type = str(config.model.attention_type)
-if attention_type == 'rwkv7':
-    attention_type = 'rwkv7_fla_fused_recurrent'
-os.environ["RWKV_ATTENTION_TYPE"] = attention_type
+pprint (config)
 
 model_path = config.path
+
+## check existing results file
+result_subdir = "__".join(model_path.replace(".pth", "").split("/")[-2:])
+results_dir = f'results/{result_subdir}'
+os.makedirs(results_dir, exist_ok=True)
+
+# Load existing results if they exist, then merge with new results
+results_file = f'{results_dir}/lm_eval_results.json'
+existing_results = {}
+if os.path.exists(results_file):
+    with open(results_file, 'r') as f:
+        existing_results = json.load(f)
+eval_tasks = config.tasks.split(',')
+
+print (f"{eval_tasks=}")
+tasks_existed = set(existing_results.keys())
+eval_tasks = list(set(eval_tasks) - tasks_existed)
+print (f"{tasks_existed=}")
+print (f"{eval_tasks=}")
+
+config.train = None # to avoid clashes with training configs
+
+## Set for linearization ##
+if config.is_pretrained == "no":
+    os.environ["RWKV_MODEL_TYPE"] = config.model.tmix
+    os.environ["RWKV_CTXLEN"] = str(config.model.ctx_len)
+    os.environ["RWKV_HEAD_SIZE_A"] = str(config.model.head_size)
+    attention_type = str(config.model.attention_type)
+    if attention_type == 'rwkv7':
+        attention_type = 'rwkv7_fla_fused_recurrent'
+    os.environ["RWKV_ATTENTION_TYPE"] = attention_type
+
 
 # Setup the model
 from src.model import Transformer
@@ -74,30 +104,34 @@ from safetensors.torch import load_file
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 print(f'Loading model - {model_path}')
-classname = config.model.classname
-if config.path.lower().endswith('.safetensors'):
-    load_dict = load_file(config.path)
-else:
-    load_dict = torch.load(model_path, mmap=True)
-if (classname.startswith('qwen2') or config.model.tmix.startswith('qwen2')) and config.model.n_embd < 3584:
-    load_dict['lm_head.weight'] = load_dict['model.embed_tokens.weight']
-    
-with torch.device('meta'):
-    if classname != '':
-        model_classpath = f'models.{classname}.Model_{classname}'
-        model_factory = locate(model_classpath)
-        if model_factory is None:
-            print(f"Unsupported model type: {model_classpath}")
-            exit(0)
-        model = model_factory(config)
-    #elif config.model.tmix.startswith('qwen2'):
-    #    model = Qwen2ForCausalLM(Qwen2Config(rwkv='rwkv' in config.model.tmix, **qwen_cfg), config)
+if config.is_pretrained == "yes":
+    model = AutoModelForCausalLM.from_pretrained(model_path)
+elif config.is_pretrained == "no":
+    classname = config.model.classname
+    if config.path.lower().endswith('.safetensors'):
+        load_dict = load_file(config.path)
     else:
-        model = Transformer(config)
+        load_dict = torch.load(model_path, mmap=True)
+    if (classname.startswith('qwen2') or config.model.tmix.startswith('qwen2')) and config.model.n_embd < 3584:
+        load_dict['lm_head.weight'] = load_dict['model.embed_tokens.weight']
+        
+    with torch.device('meta'):
+        if classname != '':
+            model_classpath = f'models.{classname}.Model_{classname}'
+            model_factory = locate(model_classpath)
+            if model_factory is None:
+                print(f"Unsupported model type: {model_classpath}")
+                exit(0)
+            model = model_factory(config)
+        #elif config.model.tmix.startswith('qwen2'):
+        #    model = Qwen2ForCausalLM(Qwen2Config(rwkv='rwkv' in config.model.tmix, **qwen_cfg), config)
+        else:
+            model = Transformer(config)
 
-if hasattr(model, 'configure_model'):
-    model.configure_model()
-model.load_state_dict(load_dict, assign=True, strict=False)
+    if hasattr(model, 'configure_model'):
+        model.configure_model()
+    model.load_state_dict(load_dict, assign=True, strict=False)
+
 
 match config.precision:
     case 32:
@@ -120,7 +154,7 @@ model.eval()
 
 #pipeline = PIPELINE(model, "rwkv_vocab_v20230424")
 
-eval_tasks = config.tasks.split(',')
+
 
 #RWKV_PAD = pipeline.tokenizer.encode('\n') # we will use '\n' as PAD
 #STOP_TOKEN = RWKV_PAD + pipeline.tokenizer.encode('\n\n') # we will use '\n\n' as STOP
@@ -339,7 +373,12 @@ if config.seed is None:
 
 # tokenizer = TokenizerWrapper(pipeline.tokenizer) # RWKV tokenizer
 from transformers import AutoTokenizer
-tokenizer = AutoTokenizer.from_pretrained('Qwen/Qwen2-0.5B')
+if config.is_pretrained == "yes":
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+elif config.tokenizer_name is not None:
+    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
+else:
+    tokenizer = AutoTokenizer.from_pretrained('Qwen/Qwen2-0.5B')
 RWKV_PAD = []
 
 adapter = EvalHarnessAdapter(batch_size_per_gpu=config.bsz, tokenizer=tokenizer)
@@ -347,6 +386,7 @@ with torch.no_grad():
     with torch.amp.autocast(device_type='cuda', dtype=dtype):
 	    results = evaluator.simple_evaluate(
 	        model=adapter,
+            # model_args="trust_remote_code=True",
 	        tasks=eval_tasks,
 	        #provide_description=False,
 	        num_fewshot=config.num_fewshot,
@@ -357,4 +397,9 @@ with torch.no_grad():
 	        fewshot_random_seed = config.seed,
 	    )
 
-print(results['results'])
+pprint (results["results"])
+
+# Merge new results into existing (new results override existing entries)
+existing_results.update(results['results'])
+with open(results_file, 'w') as f:
+    json.dump(existing_results, f, indent=2)

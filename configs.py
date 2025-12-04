@@ -108,7 +108,7 @@ class Train_Config:
 
     load_model:str = 'auto'
     wandb:str = ''
-    proj_dir:str = 'out'
+    proj_dir:str = '/work/hei/radlads/out/pths'
     proj_name:str = ''
     proj_suffix0:str = ''
     proj_suffix:str = '0'
@@ -377,6 +377,6 @@ if __name__ == '__main__':
 
     import sys
     config, errors = parse_cmdline_configs(sys.argv[1:], CLI_Config)
-    print(config)
+    # print(config)
     if errors != '':
         print(errors)

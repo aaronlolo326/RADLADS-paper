@@ -45,7 +45,7 @@ train:
   adam_eps: 1e-8 
   weight_decay: 0
 
-  devices: 1
+  devices: 4
   num_nodes: 1
   micro_bsz: 4
   accumulate_grad_batches: 1 # total bsz 32
