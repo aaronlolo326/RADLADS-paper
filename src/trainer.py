@@ -31,6 +31,9 @@ class train_callback(pl.Callback):
         # set current epoch properly so we don't need annoying calculations later on to adjust it
         trainer.fit_loop.epoch_progress.current.ready = self.config.train.epoch_begin
         trainer.fit_loop.epoch_progress.current.completed = self.config.train.epoch_begin
+        config = self.config
+        if config.train.attention_distillation_stage == 1:
+            pl_module.save_weights(f"{config.runtime.proj_path}/rwkv-init.pth")
 
     def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
         config = self.config

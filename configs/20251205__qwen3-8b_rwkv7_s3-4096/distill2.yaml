@@ -1,24 +1,28 @@
 model:
-  ctx_len: 16384
+  ctx_len: 512
 
 train:
   wandb: qwen2rwkv
   
-  proj_suffix: 4
+  proj_suffix: 2
   train_stage: 3
   load_partial: 0
 
   data_type: "binidx" 
   data_file: "/mnt/nfs/hei/data/dclm-10B" #data/minipile_qwen2" 
-  my_exit_tokens: 250000000 #1491785955
-  magic_prime: 2929793 # 2913641 # 364193
+  my_exit_tokens: 500000000 #1491785955
+  magic_prime: 2913641 # 364193
 
   optimizer: dsfusedadamw
-  lr_wait: 0.8
-  lr_decay_type: linear
-  lr_init: 7e-6
-  lr_final: 7e-6
-  warmup_steps: 50 
+  #optimizer: adamwschedulefree
+  lr_wait: 0.833
+  lr_endpoint: 0.875
+  lr_decay_type: cos
+  lr_init: 1e-5
+  lr_final: 1e-5
+  lr2_init: 1e-5
+  lr2_final: 1e-5
+  warmup_steps: 50
   beta1: 0.9 
   beta2: 0.95 
   adam_eps: 1e-8 
@@ -28,9 +32,16 @@ train:
   num_nodes: 1
   micro_bsz: 12
   accumulate_grad_batches: 1 # 96 total bsz
-  strategy: fsdp 
+  strategy: deepspeed_stage_1 #fsdp 
   grad_cp: 1
   ds_bucket_mb: 200 # set to 2 for consumer GPUs, set to 200 for A100 / H100 (affects speed & vram usage)
 
-  epoch_save: 1
+  #gradient_clip_val: 0
 
+  epoch_save: 5
+
+  attention_distillation_stage: 2
+  
+  teacher:
+    kl_weight: 1.0
+    ce_weight: 0.0

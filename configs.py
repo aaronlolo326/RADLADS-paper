@@ -72,6 +72,8 @@ class Transformer_Config(Model_Config):
 
     use_tokenshift:int = 1
 
+    attention_bias:bool = False
+
 @dataclass(kw_only=True)
 class FinchC2_Config(Transformer_Config):
     use_one_minus_w:int = 1

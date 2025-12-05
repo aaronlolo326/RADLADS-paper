@@ -1,4 +1,6 @@
 #!/bin/bash
+source "$(dirname "$0")/vars.sh"
+echo $RUN_NAME
 export CUDA_VISIBLE_DEVICES=1 #1,3,5 #0,1,2,3,4,5,6,7 #0,1,3,4,5,6,7
 export USERNAME=$(whoami)
 export BASE="${1:-/work/${USERNAME}}/radlads"
@@ -8,63 +10,57 @@ export MAIN_PROCESS_PORT=29503
 # logs_dir="logs/logs_1201"
 # mkdir -p ${logs_dir}
 
-## Originally pretrained ##
-ORIGINAL_MODEL_NAME="Qwen2.5-7B-Instruct"
-ORIGINAL_MODEL_PATH="Qwen/Qwen2.5-7B-Instruct"
-MODEL_PATH="${BASE}/pths/${ORIGINAL_MODEL_NAME}/pretrained.pth"
+# ## Originally pretrained ##
+# ORIGINAL_MODEL_NAME="Qwen2.5-7B-Instruct"
+# ORIGINAL_MODEL_PATH="Qwen/Qwen2.5-7B-Instruct"
+# MODEL_PATH="${BASE}/pths/${ORIGINAL_MODEL_NAME}/pretrained.pth"
+# CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
+# python run_lm_eval.py \
+#     --path ${ORIGINAL_MODEL_PATH} \
+#     --is_pretrained yes \
+#     --bsz 24 \
+#     --tasks winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai,mmlu,mathqa,race
+#     # gsm8k
+# #     # --tasks winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa
+
+
+
+MODEL_PATH="${BASE}/out/pths/${RUN_NAME}/rwkv-final.pth"
 CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
 python run_lm_eval.py \
-    --path ${ORIGINAL_MODEL_PATH} \
-    --is_pretrained yes \
-    --bsz 24 \
-    --tasks gsm8k, mathqa, race
-#     --tasks lambada_openai,mmlu
-#     # --tasks winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa
+    -c configs/qwen7b.yaml \
+    -c configs/${RUN_NAME}/qwerky7.yaml \
+    --path ${MODEL_PATH} \
+    --is_pretrained no \
+    --bsz 16 \
+    --tasks winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai,mmlu,mathqa,race
+    # gsm8klambada_openai,mmlu
 
-
-
-
-
-BASE_MODEL_NAME="L28-D3584-qwerky7_qwen2" # GatedDeltaNet-1B7-ckpt36k"
-
-MODEL_NAME="${BASE_MODEL_NAME}-1"
+MODEL_NAME="${RUN_NAME}-2"
 MODEL_PATH="${BASE}/out/pths/${MODEL_NAME}/rwkv-final.pth"
 CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
 python run_lm_eval.py \
     -c configs/qwen7b.yaml \
-    -c configs/20251127/qwerky7.yaml \
+    -c configs/${RUN_NAME}/qwerky7.yaml \
     --path ${MODEL_PATH} \
     --is_pretrained no \
-    --bsz 24 \
-    --tasks gsm8k, mathqa, race
-    # --tasks lambada_openai,mmlu
-    # --tasks winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa
+    --bsz 16 \
+    --tasks winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai,mmlu,mathqa,race
+    # gsm8klambada_openai,mmlu
 
-MODEL_NAME="${BASE_MODEL_NAME}-2"
+
+MODEL_NAME="${RUN_NAME}-4-4k"
 MODEL_PATH="${BASE}/out/pths/${MODEL_NAME}/rwkv-final.pth"
 CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
 python run_lm_eval.py \
     -c configs/qwen7b.yaml \
-    -c configs/20251127/qwerky7.yaml \
+    -c configs/${RUN_NAME}/qwerky7.yaml \
     --path ${MODEL_PATH} \
     --is_pretrained no \
-    --bsz 24 \
-    --tasks gsm8k, mathqa, race
-    # --tasks lambada_openai,mmlu
-    # --tasks winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa
+    --bsz 16 \
+    --tasks winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai,mmlu,mathqa,race
+    # gsm8k
 
-MODEL_NAME="${BASE_MODEL_NAME}-4"
-MODEL_PATH="${BASE}/out/pths/${MODEL_NAME}/rwkv-final.pth"
-CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
-python run_lm_eval.py \
-    -c configs/qwen7b.yaml \
-    -c configs/20251127/qwerky7.yaml \
-    --path ${MODEL_PATH} \
-    --is_pretrained no \
-    --bsz 24 \
-    --tasks gsm8k, mathqa, race
-    # --tasks lambada_openai,mmlu
-    # --tasks winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa
 
 
 

@@ -15,3 +15,4 @@ model:
     rope:
         __type__: configs.RoPE_Config
         base: 1000000.0
+    attention_bias: False

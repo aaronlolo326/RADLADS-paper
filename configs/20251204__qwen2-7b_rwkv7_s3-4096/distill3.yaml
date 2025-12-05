@@ -1,0 +1,36 @@
+model:
+  ctx_len: 4096
+
+train:
+  wandb: qwen2rwkv
+  
+  proj_suffix: 4-4k
+  train_stage: 3
+  load_partial: 0
+
+  data_type: "binidx" 
+  data_file: "/mnt/nfs/hei/data/dclm-10B"
+  my_exit_tokens: 500000000 #1491785955
+  magic_prime: 366227
+
+  optimizer: dsfusedadamw
+  lr_wait: 0.8
+  lr_decay_type: linear
+  lr_init: 7e-6
+  lr_final: 7e-6
+  warmup_steps: 50
+  beta1: 0.9 
+  beta2: 0.95 
+  adam_eps: 1e-8 
+  weight_decay: 0
+
+  devices: 6
+  num_nodes: 1
+  micro_bsz: 2
+  accumulate_grad_batches: 6 # 32 total bsz
+  strategy: fsdp # fsdp 
+  grad_cp: 1
+  ds_bucket_mb: 200 # set to 2 for consumer GPUs, set to 200 for A100 / H100 (affects speed & vram usage)
+
+  epoch_save: 1
+
