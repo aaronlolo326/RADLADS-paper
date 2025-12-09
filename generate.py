@@ -5,9 +5,11 @@
 # pip install rwkv lm_eval --upgrade
 #
 import os, sys, types, json, math, time
+import warnings
 import numpy as np
 np.set_printoptions(precision=4, suppress=True, linewidth=200)
 
+from pprint import pformat, pprint
 #import transformers # just for a bugfix for 0.4.2 of lm_eval
 from transformers import AutoModelForCausalLM
 
@@ -16,6 +18,9 @@ torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cuda.matmul.allow_tf32 = True
 from torch.nn import functional as F
+
+# Suppress warning from fla.ops.rwkv7.fused_recurrent about input tensor shape
+warnings.filterwarnings('ignore', message='Input tensor shape suggests potential format mismatch')
 
 from pydoc import locate
 
@@ -36,14 +41,16 @@ import typing
 class CLI_Config:
     path: str
     tokenizer_path: str = 'Qwen/Qwen2.5-72B-Instruct'
-    prompt:str = "Hey, are you conscious? Can you talk to me?"
-    max_len:int = 30
+    # prompt:str = "The Chinese University of Hong"
+    prompt:str = "Lard is a semi-solid white fat product obtained by rendering the fatty"
+    max_len:int = 50
     attempts:int = 1
     precision: int | str = 'bf16'
     num_fewshot: int = 0
     seed: int | None = None
     train:typing.Any = None
     model: Model_Config
+    is_instruct: int = 0
 
 config, errors = parse_cmdline_configs(sys.argv[1:], CLI_Config)
 if errors != '':
@@ -74,8 +81,15 @@ if config.path.lower().endswith('.safetensors'):
     load_dict = load_file(config.path)
 else:
     load_dict = torch.load(model_path, mmap=True)
-if (classname.startswith('qwen2') or config.model.tmix.startswith('qwen2')) and config.model.n_embd < 3584:
-    load_dict['lm_head.weight'] = load_dict['model.embed_tokens.weight']
+# pprint (list(load_dict.keys()))
+# pprint (load_dict)
+# pprint (f"{config.model.n_embd=}")
+if any([
+    (classname.startswith('qwen2') or config.model.tmix.startswith('qwen2')) and config.model.n_embd < 3584,
+    (classname.startswith('qwen3') or config.model.tmix.startswith('qwen3')) and config.model.n_embd < 4096,
+]):
+    if 'lm_head.weight' not in load_dict:
+        load_dict['lm_head.weight'] = load_dict['model.embed_tokens.weight']
     
 with torch.device('meta'):
     if classname != '':
@@ -85,11 +99,13 @@ with torch.device('meta'):
             print(f"Unsupported model type: {model_classpath}")
             exit(0)
         model = model_factory(config)
+        print (f"Loaded {model_classpath=}")
     #elif config.model.tmix.startswith('qwen2'):
     #    model = Qwen2ForCausalLM(Qwen2Config(rwkv='rwkv' in config.model.tmix, **qwen_cfg), config)
     else:
         model = Transformer(config)
 
+# pprint(config)
 tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_path, trust_remote_code=True)
 
 if hasattr(model, 'configure_model'):
@@ -122,16 +138,23 @@ from transformers import AutoTokenizer, Qwen2ForCausalLM, set_seed
 
 set_seed(config.seed)
 
-messages = [
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": config.prompt}
-]
-text = tokenizer.apply_chat_template(
-    messages,
-    tokenize=False,
-    add_generation_prompt=True
-)
+if config.is_instruct:
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": config.prompt}
+    ]
+    text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True
+    )
+else:
+    text = config.prompt
+
+print (f"{text=}")
 inputs = tokenizer(text, return_tensors="pt").to('cuda')['input_ids']
+
+# print (model)
 
 # Generate
 for i in range(config.attempts):

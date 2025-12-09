@@ -550,7 +550,7 @@ class LightningModelWrapper(pl.LightningModule):
                 results = self.model(x, output_hidden_states=False)
             elif self.config.model.classname != '':
                 results = self.model(x, last_model_state, output_hidden_states=False)
-            elif self.config.model.tmix.lower().startswith('qwen2'):
+            elif self.config.model.tmix.lower().startswith('qwen2') or self.config.model.tmix.lower().startswith('qwen3'):
                 results = self.model(x, attention_mask=causal_mask, output_hidden_states=False)
             else:
                 results = self.model(x, last_model_state)

@@ -56,6 +56,7 @@ class CLI_Config:
     is_pretrained: str = "no"
     tokenizer_name: str | None = None
 
+print (sys.argv)
 config, errors = parse_cmdline_configs(sys.argv[1:], CLI_Config)
 if errors != '':
     print(errors)
@@ -82,6 +83,9 @@ tasks_existed = set(existing_results.keys())
 eval_tasks = list(set(eval_tasks) - tasks_existed)
 print (f"{tasks_existed=}")
 print (f"{eval_tasks=}")
+if not eval_tasks:
+    print ("all tasks evaluated in results dir; nothing to evaluate")
+    exit()
 
 config.train = None # to avoid clashes with training configs
 
@@ -112,7 +116,10 @@ elif config.is_pretrained == "no":
         load_dict = load_file(config.path)
     else:
         load_dict = torch.load(model_path, mmap=True)
-    if (classname.startswith('qwen2') or config.model.tmix.startswith('qwen2')) and config.model.n_embd < 3584:
+    if any([
+        (classname.startswith('qwen2') or config.model.tmix.startswith('qwen2')) and config.model.n_embd < 3584,
+        (classname.startswith('qwen3') or config.model.tmix.startswith('qwen3')) and config.model.n_embd < 4096,
+    ]):
         load_dict['lm_head.weight'] = load_dict['model.embed_tokens.weight']
         
     with torch.device('meta'):
@@ -379,6 +386,8 @@ elif config.tokenizer_name is not None:
     tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
 else:
     tokenizer = AutoTokenizer.from_pretrained('Qwen/Qwen2-0.5B')
+print (f"{tokenizer=}")
+
 RWKV_PAD = []
 
 adapter = EvalHarnessAdapter(batch_size_per_gpu=config.bsz, tokenizer=tokenizer)
@@ -397,7 +406,11 @@ with torch.no_grad():
 	        fewshot_random_seed = config.seed,
 	    )
 
-pprint (results["results"])
+pprint ({
+    k: v
+    for k, v in results["results"].items()
+    if k in eval_tasks
+})
 
 # Merge new results into existing (new results override existing entries)
 existing_results.update(results['results'])

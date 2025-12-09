@@ -43,7 +43,7 @@ if __name__ == "__main__":
 
     runtime_config = Runtime_Config()
     config.runtime = runtime_config
-    runtime_config.my_timestamp = datetime.datetime.today().strftime("%Y-%m-%d-%H-%M-%S")
+    runtime_config.my_timestamp = datetime.datetime.today().strftime("%H-%M-%S")
     runtime_config.global_step_bsz = int(config.train.num_nodes) * int(config.train.devices) * config.train.micro_bsz * config.train.accumulate_grad_batches
     os.environ["RWKV_MODEL_TYPE"] = config.model.tmix
     os.environ["RWKV_CTXLEN"] = str(config.model.ctx_len)
@@ -53,7 +53,8 @@ if __name__ == "__main__":
     model_name = f'{config.model.tmix}'
     if config.model.tmix2 != '':
         model_name += f'_{config.model.tmix2}'
-    runtime_config.run_name = f"{model_name} L{config.model.n_layer} D{config.model.n_embd} ctx{config.model.ctx_len} "
+    # runtime_config.run_name = f"{model_name} L{config.model.n_layer} D{config.model.n_embd} ctx{config.model.ctx_len} "
+    runtime_config.run_name = f"{config.train.proj_name}-{config.train.proj_suffix}"
     
     if config.train.proj_name == '':
         config.train.proj_name = f'L{config.model.n_layer}-D{config.model.n_embd}-{config.model.tmix}'
@@ -307,7 +308,7 @@ if __name__ == "__main__":
             mm = {k: v.cpu() for k, v in model.state_dict().items()} #model.state_dict()
         else:
             mm = model.generate_init_weight()
-        init_weight_name = f"{config.runtime.proj_path}/rwkv-init.pth"
+        init_weight_name = f"{config.runtime.proj_path}/rwkv-init_for-stage-2.pth"
         print(f"Save to {init_weight_name}...")
         torch.save(mm, init_weight_name)
         print("Done. Now go for stage 2.")

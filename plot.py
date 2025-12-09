@@ -1,104 +1,250 @@
 #!/usr/bin/env python3
 import os
+import argparse
 import glob
 import json
+import re
+from functools import cmp_to_key
 from collections import defaultdict
+
+from typing import List
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+from pprint import pprint
 
 RESULTS_ROOT = "/home/hei/RADLADS-paper/results"
 OUT_DIR = "/home/hei/RADLADS-paper/plots"
 
 selected_tasks = "winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai,mmlu,mathqa,race,gsm8k".split(",")
 
-def load_results(results_root: str):
+pretrained_models = [
+    "Qwen__Qwen2.5-7B-Instruct",
+    "Qwen__Qwen3-8B-Base"
+]
+
+def parse_model_name(model_name):
+    # "[a]__[b]-[c]__[d]"
+    split1 = model_name.split('__')
+    if len(split1) < 3:
+        raise ValueError(f"Unexpected model name format: {model_name}")
+    a = split1[0]
+    b_and_c = split1[1]
+    # REGEX: Match "[b]-[c]", where [b] can contain hyphens
+    m = re.match(r"(.*)-(\d+(?:-\d+k)?)$", b_and_c)
+    if m:
+        b, c = m.group(1), m.group(2)
+    else:
+        # fallback: assume all of b_and_c is b, and c is ""
+        b, c = b_and_c, ""
+    # d is everything after the 2nd '__' (e.g., "__qwen2_final") or "" if not present
+    d = split1[2] if len(split1) > 2 else ""
+    return a, b, c, d
+
+def sort_key(model_name):
+    a, b, c, d = parse_model_name(model_name)
+
+    # [a] : date, compare as integer if possible
+    try:
+        a_key = int(a)
+    except:
+        a_key = a
+
+    # [b] : lexicographical
+    b_key = b
+
+    # [c] : "1", "2", "4", or "4-16k", "4-32k", etc.
+    # Ideally, sort "1" < "2" < "4" < "4-16k" < "4-32k" < ...
+    if c in ("1", "2", "4"):
+        c_key = (0, int(c))
+    else:
+        m = re.match(r"(\d+)-(\d+)k", c)
+        if m:
+            n1, n2 = m.groups()
+            c_key = (1, int(n1), int(n2))
+        else:
+            c_key = (2, c)
+
+    # [d] : [model]_[ckpt], where [ckpt] can be init, 1, 2, ..., final
+    if '-' in d:
+        model_d, ckpt = d.rsplit('-', 1)
+    else:
+        model_d, ckpt = '', d
+    # init < numbers < final
+    if ckpt == "init":
+        ckpt_key = (0, 0)
+    elif ckpt == "final":
+        ckpt_key = (2, 0)
+    else:
+        # try to parse number, otherwise lex sort
+        try:
+            ckpt_num = int(ckpt)
+            ckpt_key = (1, ckpt_num)
+        except:
+            ckpt_key = (1, ckpt)
+    d_key = (model_d, ckpt_key)
+
+    return (a_key, b_key, c_key, d_key)
+
+def load_results(results_root: str, runs_name: List[str], exc_runs: List[str], final_only: bool, step2_only: bool):
     """
     Walk each model directory under results_root, load lm_eval_results.json,
     and return a nested dict:
         data[task][model] = {"acc": float or None, "acc_norm": float or None}
     """
     pattern = os.path.join(results_root, "*", "lm_eval_results.json")
+
     files = glob.glob(pattern)
     data = defaultdict(dict)
 
+
     for fp in sorted(files):
         model_dir = os.path.basename(os.path.dirname(fp))
-        with open(fp, "r") as f:
-            j = json.load(f)
+        if model_dir in pretrained_models:
+            proceed = True
+        else:
+            a,b,c,d = parse_model_name(model_dir)
+            if step2_only:
+                print (a,b,c,d)
+                if not c.startswith("4"):
+                    continue
+            run_name_step, ckpt = model_dir.rsplit("__", maxsplit=1)
+            if runs_name == []:
+                proceed = True
+                for exc_run in exc_runs:
+                    if run_name_step.startswith(exc_run):
+                        proceed = False
+                        break
+            else:
+                proceed = False
+                for targ_run_name in runs_name:
+                    if run_name_step.startswith(targ_run_name) and targ_run_name not in exc_runs:
+                        proceed = True
+                        break
+            if final_only and "final" not in ckpt:
+                continue
+         
+        if proceed:
+            with open(fp, "r") as f:
+                j = json.load(f)
 
-        for task_name, task_res in j.items():
-            acc = task_res.get("acc,none", None)
-            acc_norm = task_res.get("acc_norm,none", None)
-            # map to renamed keys
-            data[task_name][model_dir] = {
-                "acc": acc,
-                "acc_norm": acc_norm,
-            }
+            for task_name, task_res in j.items():
+                acc = task_res.get("acc,none", None)
+                acc_norm = task_res.get("acc_norm,none", None)
+                # map to renamed keys
+                data[task_name][model_dir] = {
+                    "acc": acc,
+                    "acc_norm": acc_norm,
+                }
 
     return data
 
 
-def plot_task(task_name, task_data, out_dir):
+# def plot_task(task_name, task_data, out_dir):
+#     """
+#     task_data: dict[model] -> {"acc": float or None, "acc_norm": float or None}
+#     Creates a bar chart with models on x-axis and two bars (acc, acc_norm).
+#     """
+#     models = sorted(task_data.keys())
+#     accs = [task_data[m]["acc"] for m in models]
+#     acc_norms = [task_data[m]["acc_norm"] for m in models]
+
+#     # Handle case where one of the metrics is missing entirely
+#     has_acc = any(v is not None for v in accs)
+#     has_acc_norm = any(v is not None for v in acc_norms)
+
+#     if not has_acc and not has_acc_norm:
+#         return  # nothing to plot
+
+#     x = np.arange(len(models))
+#     width = 0.35
+
+#     fig, ax = plt.subplots(figsize=(max(6, len(models) * 0.8), 5))
+
+#     bars = []
+#     labels = []
+
+#     if has_acc:
+#         bars_acc = ax.bar(x - width/2, accs, width, label="acc")
+#         bars.append(bars_acc)
+#         labels.append("acc")
+
+#     if has_acc_norm:
+#         bars_accn = ax.bar(x + (0 if not has_acc else width/2),
+#                            acc_norms, width, label="acc_norm")
+#         bars.append(bars_accn)
+#         labels.append("acc_norm")
+
+#     ax.set_title(f"{task_name}")
+#     ax.set_xticks(x)
+#     ax.set_xticklabels(models, rotation=45, ha="right")
+#     ax.set_ylabel("Score")
+#     ax.set_ylim(0, 1.0)  # accuracy in [0,1]
+#     ax.legend()
+
+#     plt.tight_layout()
+#     os.makedirs(out_dir, exist_ok=True)
+#     out_path = os.path.join(out_dir, f"{task_name}.png")
+#     plt.savefig(out_path, dpi=200)
+#     plt.close(fig)
+
+
+def plot_aggregate(data, metric: str, out_dir: str, date_str: str, runs_name: List[str]):
     """
-    task_data: dict[model] -> {"acc": float or None, "acc_norm": float or None}
-    Creates a bar chart with models on x-axis and two bars (acc, acc_norm).
-    """
-    models = sorted(task_data.keys())
-    accs = [task_data[m]["acc"] for m in models]
-    acc_norms = [task_data[m]["acc_norm"] for m in models]
-
-    # Handle case where one of the metrics is missing entirely
-    has_acc = any(v is not None for v in accs)
-    has_acc_norm = any(v is not None for v in acc_norms)
-
-    if not has_acc and not has_acc_norm:
-        return  # nothing to plot
-
-    x = np.arange(len(models))
-    width = 0.35
-
-    fig, ax = plt.subplots(figsize=(max(6, len(models) * 0.8), 5))
-
-    bars = []
-    labels = []
-
-    if has_acc:
-        bars_acc = ax.bar(x - width/2, accs, width, label="acc")
-        bars.append(bars_acc)
-        labels.append("acc")
-
-    if has_acc_norm:
-        bars_accn = ax.bar(x + (0 if not has_acc else width/2),
-                           acc_norms, width, label="acc_norm")
-        bars.append(bars_accn)
-        labels.append("acc_norm")
-
-    ax.set_title(f"{task_name}")
-    ax.set_xticks(x)
-    ax.set_xticklabels(models, rotation=45, ha="right")
-    ax.set_ylabel("Score")
-    ax.set_ylim(0, 1.0)  # accuracy in [0,1]
-    ax.legend()
-
-    plt.tight_layout()
-    os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"{task_name}.png")
-    plt.savefig(out_path, dpi=200)
-    plt.close(fig)
-
-
-def plot_aggregate(data, metric: str, out_dir: str):
-    """
-    Create a grouped bar plot for one metric ('acc' or 'acc_norm'):
-    - x-axis: tasks (one group per task)
+    Create a grouped horizontal bar plot for one metric ('acc' or 'acc_norm'):
+    - y-axis: tasks (one group per task)
     - within each group: one bar per model
     """
     # collect all tasks and models
     tasks = sorted(data.keys())
     tasks = [x for x in tasks if x in selected_tasks]
-    all_models = sorted({m for task_data in data.values() for m in task_data.keys()})
 
+    def cmp_method(model_name1, model_name2):
+        """
+        Model names are like: "[a]__[b]-[c]__[d]". Compare two model names according to a custom sort order:
+        - primarily sort according to [a], which is a simple date string like 20251208
+        - then sort according to [b], which is a name like qwen3-8b_rwkv7qknorm_s3-2048
+        - then sort according to [c], which can take a value from ["1", "2", "4"] or is f"4-{i}k" where i is a number
+        - finally sort according to [d], which is like [model]_[ckpt], and we want [model]_init < [model]_1 < [model]_2 < ... < [model]_final
+        """
+        import re
+
+        if model_name1 in pretrained_models:
+            k1 = model_name1 
+        else:
+            k1 = sort_key(model_name1)
+        if model_name2 in pretrained_models:
+            k2 = model_name2
+        else:
+            k2 = sort_key(model_name2)
+        
+        if isinstance(k1, str):
+            if isinstance(k2, str):
+                if k1 < k2:
+                    return -1
+                elif k1 > k2:
+                    return 1
+                else:
+                    return 0
+            else:
+                return -1
+        if isinstance(k2, str):
+            return 1
+            
+        if k1 < k2:
+            return -1
+        elif k1 > k2:
+            return 1
+        else:
+            return 0
+
+
+    
+        
+    all_models = sorted({m for task_data in data.values() for m in task_data.keys()}, key=cmp_to_key(cmp_method))
+    # pprint (all_models)
+    
     # keep only models that have at least one non-None value for this metric
     models = []
     for model in all_models:
@@ -112,56 +258,88 @@ def plot_aggregate(data, metric: str, out_dir: str):
     if not models:
         return
 
-    x = np.arange(len(tasks))
-    total_width = 0.8
-    bar_width = total_width / len(models)
+    y = np.arange(len(tasks))
+    total_height = 0.8
+    bar_height = total_height / len(models)
 
-    fig, ax = plt.subplots(figsize=(max(6, len(tasks) * 0.6), 5))
+    fig, ax = plt.subplots(figsize=(13,len(tasks) * 1))
+
+    # Use a consistent color for each model based on model name
+    color_map = plt.get_cmap('tab20')
 
     for i, model in enumerate(models):
         # center the whole group around each task position
-        offsets = x - total_width / 2 + i * bar_width + bar_width / 2
+        offsets = y - total_height / 2 + i * bar_height + bar_height / 2
 
-        heights = []
+        widths = []
         for task_name in tasks:
             val = data[task_name].get(model, {}).get(metric)
-            heights.append(val if val is not None else 0.0)
+            widths.append(val if val is not None else 0.0)
 
-        bars = ax.bar(offsets, heights, bar_width, label=model)
-        # ax.bar_label(bars, fmt='%.1f') # Formats labels to one decimal place
+        # Apply color_map to choose a color for this model
+        color = color_map(i % color_map.N)
 
+        bars = ax.barh(
+            offsets,
+            widths,
+            bar_height, 
+            label=model,
+            color=color
+        )
+        # ax.bar_label(bars, fmt='%.2f') # Formats labels to two decimal places
 
-    ax.set_title(f"{metric} per task (grouped by model)")
-    ax.set_xticks(x)
-    ax.set_xticklabels(tasks, rotation=45, ha="right")
-    ax.set_ylabel("Score")
-    ax.set_ylim(0, 1.0)
-    ax.legend(loc='lower right', bbox_to_anchor=(1, 0), bbox_transform=fig.transFigure)
-    ax.grid(True, axis='y', linestyle='--', alpha=0.7) 
+    ax.set_title(f"{metric} per task")
+    ax.set_yticks(y)
+    ax.set_yticklabels(tasks)
+    ax.set_xlabel("Score")
+    ax.set_xlim(0, 0.9)
+    # Ensure legend shows the same color as bars
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(handles[::-1], labels[::-1], loc='lower left', bbox_to_anchor=(0.6, 0.2), bbox_transform=fig.transFigure)
+
+    ax.grid(True, axis='x', linestyle='--', alpha=0.7)
 
     plt.tight_layout()
-    plt.subplots_adjust(bottom=0.4)
+    plt.subplots_adjust(left=0.1, right=0.6, bottom=0.10)
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"grouped_{metric}_by_task.png")
+
+    multi_run = len(runs_name) != 1
+    if not multi_run:
+        out_dir = os.path.join(out_dir, runs_name[0])
+        os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, "_".join([date_str, f"grouped_{metric}.png"]))
     plt.savefig(out_path, dpi=200)
     plt.close(fig)
+    print(f"Saved task and aggregate plots to: {out_path}")
 
 
 def main():
-    data = load_results(RESULTS_ROOT)
+
+    parser = argparse.ArgumentParser(description="plot.py")
+    parser.add_argument("--runs_name", help="runs_name", default="",)
+    parser.add_argument("--exc_runs", help="exc_runs", default="",)
+    parser.add_argument("--date_str", help="date_str", default="",)
+    parser.add_argument("--final_only", help="final ckpt only", action="store_true")
+    parser.add_argument("--step2_only", help="step 2 ckpt only", action="store_true")
+    # parser.add_argument("--age", type=int, help="Your age", default=30)
+    args = parser.parse_args()
+
+    runs_name = args.runs_name.replace(",", " ")
+    runs_name = runs_name.split()
+    exc_runs = args.exc_runs.replace(",", " ")
+    exc_runs = exc_runs.split()
+    
+    data = load_results(RESULTS_ROOT, runs_name=runs_name, exc_runs=exc_runs, final_only=args.final_only, step2_only=args.step2_only)
     os.makedirs(OUT_DIR, exist_ok=True)
 
     # per-task plots
-    for task_name, task_data in data.items():
-        if task_name in selected_tasks:
-            plot_task(task_name, task_data, OUT_DIR)
+    # for task_name, task_data in data.items():
+    #     if task_name in selected_tasks:
+    #         plot_task(task_name, task_data, OUT_DIR)
 
     # aggregate over all tasks for each metric
-    plot_aggregate(data, "acc", OUT_DIR)
-    plot_aggregate(data, "acc_norm", OUT_DIR)
-
-    print(f"Saved task and aggregate plots to: {OUT_DIR}")
-
+    plot_aggregate(data, "acc", OUT_DIR, date_str=args.date_str, runs_name=runs_name)
+    plot_aggregate(data, "acc_norm", OUT_DIR, date_str=args.date_str, runs_name=runs_name)
 
 if __name__ == "__main__":
     main()

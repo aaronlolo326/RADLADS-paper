@@ -1,0 +1,9 @@
+model:
+  tmix: qwerky7
+  attention_type: rwkv7 # rwkv7 # rwkv7_wind_backstepping_longhead # rwkv7_wind_replaystepping_longhead # 
+  reinit_att: 0
+  gate_rank_type: 2
+  use_pos_emb: 1
+  balance_state: 0
+  groupnorm_att: 1
+  use_qk_norm: 0

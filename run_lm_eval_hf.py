@@ -70,7 +70,10 @@ if config.path.lower().endswith('.safetensors'):
     load_dict = load_file(config.path)
 else:
     load_dict = torch.load(model_path, mmap=True)
-if (classname.startswith('qwen2') or config.model.tmix.startswith('qwen2')) and config.model.n_embd < 3584:
+if any([
+    (classname.startswith('qwen2') or config.model.tmix.startswith('qwen2')) and config.model.n_embd < 3584,
+    (classname.startswith('qwen3') or config.model.tmix.startswith('qwen3')),
+]):
     load_dict['lm_head.weight'] = load_dict['model.embed_tokens.weight']
     
 #with torch.device('meta'):

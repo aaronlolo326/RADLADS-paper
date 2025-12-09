@@ -73,6 +73,7 @@ class Transformer_Config(Model_Config):
     use_tokenshift:int = 1
 
     attention_bias:bool = False
+    use_qk_norm:int = 0
 
 @dataclass(kw_only=True)
 class FinchC2_Config(Transformer_Config):
