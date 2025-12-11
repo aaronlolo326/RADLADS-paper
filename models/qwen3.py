@@ -1137,7 +1137,8 @@ class TMix_qwen3gdn_base(TMix_qwen3):
         # # )
         ###
 
-        self.config = config
+
+        # self.config = config # defined
 
         # attention_bias = config.attention_bias
         # attention_output_bias = False
@@ -1199,27 +1200,26 @@ class TMix_qwen3gdn_base(TMix_qwen3):
         # self.q_proj = nn.Linear(C, self.key_dim, bias=False) # super-defined
         # self.k_proj = nn.Linear(C, self.key_dim, bias=False) # super-defined
         # self.v_proj = nn.Linear(C, self.value_dim, bias=False) # super-defined
+
+        self.reset_parameters()
+        ###
+
+    def reset_parameters(self):
+        print("Called reset_parameters on TMix_qwen3gdn_base layer ", self.layer_id)
+
+        # TODO: check deterministic init?
+
+        module = self
+
+        C = self.hidden_size = self.config.n_embd
+
         self.a_proj = nn.Linear(C, self.num_v_heads, bias=False)
         self.b_proj = nn.Linear(C, self.num_v_heads, bias=False)
 
         A = torch.empty(self.num_v_heads, dtype=torch.float32).uniform_(0, 16)
         self.A_log = nn.Parameter(torch.log(A))
         self.A_log._no_weight_decay = True
-        # hard coded for now
-        dt_min = 0.001
-        dt_max = 0.1
-        dt_init_floor = 1e-4
-        dt = torch.exp(
-            torch.rand(self.num_v_heads) * (math.log(dt_max) - math.log(dt_min))
-            + math.log(dt_min),
-        )
-        dt = torch.clamp(dt, min=dt_init_floor)
-        # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
-        inv_dt = dt + torch.log(-torch.expm1(-dt))
-        self.dt_bias = nn.Parameter(inv_dt)
-        # Just to be explicit. Without this we already don't put wd on dt_bias because of the check
-        # name.endswith("bias") in param_grouping.py
-        self.dt_bias._no_weight_decay = True
+
 
         if self.use_short_conv:
             self.conv_size = self.conv_size
@@ -1246,103 +1246,6 @@ class TMix_qwen3gdn_base(TMix_qwen3):
                 "ShortConvolution is crucial to the performance. "
                 "Do not turn it off, i.e., setting `use_short_conv=False` unless you know what you are doing.",
             )
-        ###
-
-    def reset_parameters(self):
-        print("Called reset_parameters on TMix_qwen3gdn_base layer ", self.layer_id)
-
-        module = self
-
-        num_hidden_layers = n_layer = self.config.n_layer
-        n_embd = self.hidden_size
-        dim_att = self.num_heads * self.head_dim
-        layer_id = self.layer_id
-
-        ratio_0_to_1 = layer_id / (num_hidden_layers - 1)  # 0 to 1
-        ratio_1_to_almost0 = 1.0 - (layer_id / num_hidden_layers)  # 1 to ~0
-
-        # time_weight = torch.tensor(
-        #     [i / C for i in range(C)],
-        #     dtype=module.x_k.dtype,
-        #     device=module.x_k.device,
-        # )
-        # time_weight = time_weight[None, None, :]
-
-        decay_speed = [
-            -7.0 + 5.0 * (n / (self.num_heads * self.qk_head_dim - 1)) ** (0.85 + 1.0 * ratio_0_to_1 ** 0.5)
-            for n in range(self.num_heads * self.qk_head_dim)
-        ]
-
-        # def inverse_sigmoid(x): return math.log(x) - math.log(1 - x)
-        # decay_speed = [
-        #     inverse_sigmoid(0.995) + (inverse_sigmoid(0.875)-inverse_sigmoid(0.995)) * (n / (attention_hidden_size - 1)) ** (0.85 + 1.0 * ratio_0_to_1 ** 0.5)
-        #     for n in range(attention_hidden_size)
-        # ]
-        decay_speed = torch.tensor(decay_speed, dtype=module.w0.dtype, device=module.w0.device)
-
-        with torch.no_grad():
-            # torch.nn.init.zeros_(module.x_r) #.copy_( 1.0 - torch.pow(time_weight, 0.2 * ratio_1_to_almost0) )
-            # torch.nn.init.zeros_(module.x_w) #.copy_( 1.0 - torch.pow(time_weight, 0.9 * ratio_1_to_almost0) )
-            # torch.nn.init.zeros_(module.x_k) #.copy_( 1.0 - (torch.pow(time_weight, 0.9 * ratio_1_to_almost0) + 0.4 * ratio_0_to_1) )
-            # torch.nn.init.zeros_(module.x_v) #.copy_( 1.0 - (torch.pow(time_weight, 0.4 * ratio_1_to_almost0) + 0.6 * ratio_0_to_1) )
-            # torch.nn.init.zeros_(module.x_a) #.copy_( 1.0 - torch.pow(time_weight, 0.9 * ratio_1_to_almost0) )
-            # torch.nn.init.zeros_(module.x_g) #.copy_( 1.0 - torch.pow(time_weight, 0.2 * ratio_1_to_almost0) )
-            
-            ratio_0_to_1 = layer_id / (n_layer - 1)  # 0 to 1
-            ratio_1_to_almost0 = 1.0 - (layer_id / n_layer)  # 1 to ~0
-            ddd = torch.ones(1, 1, n_embd)
-            for i in range(n_embd):
-                ddd[0, 0, i] = i / n_embd
-
-            # initialization comes from fitting my RWKV-6 7B runs
-            #module.time_maa_x = nn.Parameter(1.0 - torch.pow(ddd, 0.6 * ratio_1_to_almost0 ** 0.9))
-
-            # module.x1.zero_()
-            # ortho_init(module.x2, 0.1)
-
-            # module.q1.zero_()
-            # ortho_init(module.q2, 0.1)
-            # module.k1.zero_()
-            # ortho_init(module.k2, 0.1)
-
-            module.w0.copy_(decay_speed.reshape(1,1,-1) + 0.5) # !!! 0.5 comes from F.softplus !!!
-            #module.w0.copy_(decay_speed.reshape(1,1,-1) - 1.0)
-            #module.w0.copy_(-2.0 + 1e-5 * torch.randn(1, 1, dim_att))
-            module.w1.zero_()
-            ortho_init(module.w2, 0.1)
-
-            module.a0.zero_()
-            module.a1.zero_()
-            ortho_init(module.a2, 0.1)
-
-            if layer_id > 0:
-                module.v0.copy_(1.0)
-                module.v1.zero_()
-                ortho_init(module.v2, 0.1)
-
-            if self.config.gate_rank_type == 1:
-                module.gate.weight.zero_()
-            elif self.config.gate_rank_type == 2:
-                module.g1.zero_()
-                ortho_init(module.g2, 0.1)
-
-            #module.kk1.zero_()
-            #ortho_init(module.kk2, 0.1)
-            
-            module.k_k.copy_(0.85) # FIXME - should this be 1.0?
-            module.k_a.copy_(1.0)
-            module.r_k.zero_()
-
-            #module.receptance.weight.data.uniform_(-0.5/(C**0.5), 0.5/((self.num_heads*self.qk_head_dim)**0.5))
-            #module.key.weight.data.uniform_(-0.05/(C**0.5), 0.05/((self.num_heads*self.qk_head_dim)**0.5))
-            #module.value.weight.data.uniform_(-0.5/(C**0.5), 0.5/(attention_hidden_size**0.5))
-            # module.output.weight.data.zero_()
-            #module.key.weight.data.uniform_(-0.05/(self.num_key_value_heads**0.5), 0.05/(attention_hidden_size**0.5))
-            #module.value.weight.data.uniform_(-0.05/(self.num_key_value_heads**0.5), 0.05/(attention_hidden_size**0.5))
-            # ortho_init(module.key.weight, 0.1)
-            # ortho_init(module.value.weight, 0.1)
-            # module.key.weight.data.zero_()
-            # module.value.weight.data.zero_()
 
     
     def forward(
@@ -1459,6 +1362,10 @@ class TMix_qwen3gdn(TMix_qwen3gdn_base):
 
         self.use_gate = config.use_gate
 
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        print("Called reset_parameters on TMix_qwen3gdn layer ", self.layer_id)
         self.a_proj = nn.Linear(self.hidden_size, self.num_v_heads, bias=False)
         self.b_proj = nn.Linear(self.hidden_size, self.num_v_heads, bias=False)
 
@@ -1481,8 +1388,7 @@ class TMix_qwen3gdn(TMix_qwen3gdn_base):
             self.o_norm = FusedRMSNormGated(self.head_v_dim, eps=self.norm_eps)
         else:
             self.o_norm = RMSNorm(self.head_v_dim, eps=self.norm_eps, dtype=torch.float32)
-    def reset_parameters(self):
-        pass
+            
     def forward(self, *args, **kwargs):
         super().forward(*args, **kwargs)
     def compute_beta(self, beta):
@@ -1529,7 +1435,10 @@ class TMix_qwen3kimi(TMix_qwen3gdn_base):
     def __init__(self, config:Transformer_Config, layer_id):
 
         super().__init__(config, layer_id)
+        self.reset_parameters()
 
+    def reset_parameters(self):
+        print("Called reset_parameters on TMix_qwen3kimi layer ", self.layer_id)
         self.f_proj = nn.Sequential(
             nn.Linear(self.hidden_size, self.head_v_dim, bias=False),
             nn.Linear(self.head_v_dim, self.key_dim, bias=False),
@@ -1544,8 +1453,7 @@ class TMix_qwen3kimi(TMix_qwen3gdn_base):
             nn.Linear(self.head_v_dim, self.value_dim, bias=True),
         )
         self.o_norm = FusedRMSNormGated(self.head_v_dim, activation="sigmoid", eps=self.norm_eps)
-    def reset_parameters(self):
-        pass
+
     def forward(self, *args, **kwargs):
         super().forward(*args, **kwargs)
     def compute_beta(self, beta):
