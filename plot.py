@@ -124,7 +124,7 @@ def load_results(results_root: str, runs_name: List[str], exc_runs: List[str], f
                         break
             if final_only and "final" not in ckpt:
                 continue
-         
+
         if proceed:
             with open(fp, "r") as f:
                 j = json.load(f)

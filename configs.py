@@ -73,7 +73,23 @@ class Transformer_Config(Model_Config):
     use_tokenshift:int = 1
 
     attention_bias:bool = False
-    use_qk_norm:int = 0
+    use_qk_rmsnorm:int = 0
+
+    # below for gdn, kda
+    mode:str = "chunk"
+    expand_v: float = 1.0
+    use_gate: bool = True
+    use_short_conv: bool = True
+    allow_neg_eigval: bool = False
+    conv_size: int = 4
+    conv_bias: bool = False
+    num_v_heads: int | None = None
+    norm_eps: float = 1e-6
+    use_cache: bool = True
+
+    conv_zero_init: bool = False
+    use_qk_l2norm_in_kernel: bool = True
+
 
 @dataclass(kw_only=True)
 class FinchC2_Config(Transformer_Config):

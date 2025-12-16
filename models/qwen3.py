@@ -22,6 +22,9 @@ if importlib.util.find_spec('deepspeed'):
 
 from src.logger import print0 as print
 
+from fla.models.utils import Cache
+from transformers.processing_utils import Unpack
+
 ATTENTION_TYPE = os.environ["RWKV_ATTENTION_TYPE"]
 print (f"From line 26 of qwen3.py: {ATTENTION_TYPE=}")
 if ATTENTION_TYPE == 'rwkv6':
@@ -310,6 +313,15 @@ elif 'rwkv7' in ATTENTION_TYPE or ATTENTION_TYPE == 'rwkv6_wind_backstepping_lon
             return WKV_7g.apply(r, w, k, v, a, b)  
     else:
         assert False, 'bad attention type specified'
+elif ATTENTION_TYPE in ['gdn', 'kda']:
+    from fla.modules import FusedRMSNormGated, RMSNorm, ShortConvolution
+    from fla.layers.utils import get_unpad_data, index_first_axis, pad_input
+    from einops import rearrange, repeat
+    if ATTENTION_TYPE == 'gdn':
+        from fla.ops.gated_delta_rule import chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
+    elif ATTENTION_TYPE == 'kda':
+        from fla.ops.kda import chunk_kda, fused_recurrent_kda
+        from fla.ops.kda.gate import fused_kda_gate
 else:
     assert False, 'bad attention type specified'
 
@@ -373,6 +385,17 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
+def repeat_kv_transposed(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+    """
+    This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
+    num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
+    """
+    batch, slen, num_key_value_heads, head_dim = hidden_states.shape
+    if n_rep == 1:
+        return hidden_states
+    hidden_states = hidden_states[:, :, :, None, :].expand(batch, slen, num_key_value_heads, n_rep, head_dim)
+    return hidden_states.reshape(batch, slen, num_key_value_heads * n_rep, head_dim)
+
 def get_tmix_default_state(x:Tensor, config:Transformer_Config, requires_grad:bool):
     B, T, C = x.size()
     return TimeMixState(
@@ -389,6 +412,7 @@ class LLMOutput:
     post_attention_hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
     student_attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
     student_post_attention_hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    past_key_values: Cache = None
 
 class TMix_qwen3(nn.Module):
     def get_default_state_factory(self): return get_tmix_default_state
@@ -403,6 +427,7 @@ class TMix_qwen3(nn.Module):
 
         self.hidden_size = config.n_embd
         self.num_heads = config.dim_att // self.head_dim
+        # print (f"{self.num_heads=}")
         self.num_key_value_heads = config.num_key_value_heads if config.num_key_value_heads > 0 else self.num_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         # self.max_position_embeddings = config.max_position_embeddings
@@ -431,8 +456,14 @@ class TMix_qwen3(nn.Module):
         #     base=config.rope.base,
         # )
 
-    def forward(self, x, reset_mask, v_first, last_model_state:ModelState, shared:Shared, output_attentions:bool=False):
-        last_state = last_model_state.block_states[self.layer_id].time_mix_state
+    def forward(self, x, reset_mask, v_first, last_model_state:ModelState, shared:Shared, output_attentions:bool=False, past_key_values:Cache=None, **kwargs):
+        if last_model_state is not None:
+            last_state = last_model_state.block_states[self.layer_id].time_mix_state
+            wkv_state = last_state.wkv_state
+            tmix_state = TimeMixState(wkv_state, last_state.shift_state)
+        else:
+            tmix_state = None
+
         B, L, D = x.size()
         QH = self.num_heads
         KVH = self.num_key_value_heads
@@ -441,7 +472,6 @@ class TMix_qwen3(nn.Module):
         k = self.k_proj(x)
         v = self.v_proj(x)
 
-        wkv_state = last_state.wkv_state
 
         # handle recurrent inference via maintaining a kv cache
         # if not self.training:
@@ -459,6 +489,7 @@ class TMix_qwen3(nn.Module):
         #q, k = apply_rotary_embedding(q, k, shared.angles)
         #kv_seq_len, position_ids = L, torch.arange(L, dtype=torch.int, device=v.device).view(1, L).expand(B, L)
         #cos, sin = self.rotary_emb(v, seq_len=kv_seq_len)
+        # print (f"{shared.angles.unbind()=}")
         cos, sin = shared.angles.unbind(0)
         q, k = apply_rotary_pos_emb(q, k, cos, sin)
         q = q.to(v.dtype)
@@ -490,7 +521,7 @@ class TMix_qwen3(nn.Module):
         y = nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=is_causal)
         y = y.transpose(1,2).reshape(B,L,D)
         y = self.o_proj(y)
-        return y, v_first, TimeMixState(wkv_state, last_state.shift_state), attn_weights
+        return y, v_first, tmix_state, attn_weights, past_key_values
 
 def ortho_init(x, scale):
     with torch.no_grad():
@@ -649,7 +680,7 @@ class TMix_qwen3rwkv6(TMix_qwen3):
                 module.v_proj.bias.zero_()
                 module.o_proj.weight.data.zero_()
 
-    def forward(self, x, reset_mask, v_first, last_model_state:ModelState, shared:Shared, output_attentions:bool=False):
+    def forward(self, x, reset_mask, v_first, last_model_state:ModelState, shared:Shared, output_attentions:bool=False, **kwargs):
         last_state = last_model_state.block_states[self.layer_id].time_mix_state
         bsz, q_len, hidden_dim = x.size()
 
@@ -680,7 +711,7 @@ class TMix_qwen3rwkv6(TMix_qwen3):
 
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim)
-        if self.config.use_qk_norm:
+        if self.config.use_qk_rmsnorm:
             query_states = self.q_norm(query_states)
             key_states = self.k_norm(key_states)
         query_states = query_states.transpose(1, 2)
@@ -966,7 +997,7 @@ class TMix_qwen3rwkv7(TMix_qwen3):
             # module.value.weight.data.zero_()
 
 
-    def forward(self, x, reset_mask, v_first, last_model_state:ModelState, shared:Shared, output_attentions:bool=False):
+    def forward(self, x, reset_mask, v_first, last_model_state:ModelState, shared:Shared, output_attentions:bool=False, **kwargs):
         last_state = last_model_state.block_states[self.layer_id].time_mix_state
         # bsz, q_len, hidden_dim = x.size()
         # B, L, D = x.size()
@@ -1023,9 +1054,9 @@ class TMix_qwen3rwkv7(TMix_qwen3):
 
         r = r.view(B,T,-1,N)
         k = k.view(B,T,-1,N)
-        if self.config.use_qk_norm:
+        if self.config.use_qk_rmsnorm:
             # if self.layer_id == 1:
-                # print (f"From TMix_qwen3rwkv7 forward: {self.config.use_qk_norm=}")
+                # print (f"From TMix_qwen3rwkv7 forward: {self.config.use_qk_rmsnorm=}")
             r = self.q_norm(r)
             k = self.k_norm(k)
         if self.config.use_pos_emb:
@@ -1084,11 +1115,6 @@ class TMix_qwen3rwkv7(TMix_qwen3):
 
         #return x, None, past_key_value
 
-from fla.modules import FusedRMSNormGated, RMSNorm, ShortConvolution
-from fla.models.utils import Cache
-from fla.layers.utils import get_unpad_data, index_first_axis, pad_input
-from transformers.processing_utils import Unpack
-from einops import rearrange, repeat
 
 class TMix_qwen3gdn_base(TMix_qwen3):
     """
@@ -1166,6 +1192,7 @@ class TMix_qwen3gdn_base(TMix_qwen3):
         self.expand_v = config.expand_v
 
         self.use_short_conv = config.use_short_conv
+        self.conv_zero_init = config.conv_zero_init
         self.conv_size = config.conv_size
         self.conv_bias = config.conv_bias # = False
 
@@ -1176,7 +1203,12 @@ class TMix_qwen3gdn_base(TMix_qwen3):
         self.head_k_dim = N
         self.head_v_dim = int(self.head_dim * self.expand_v)
         self.key_dim = int(self.num_heads * self.head_k_dim)
+        # from pprint import pprint
+        # pprint (config)
         self.value_dim = int(self.num_v_heads * self.head_v_dim)
+        self.norm_eps = config.norm_eps
+        self.use_gate = config.use_gate
+        self.use_qk_l2norm_in_kernel = config.use_qk_l2norm_in_kernel
         self.layer_idx = layer_id
 
         # Consistency check: Ensure expand_v produces integer values
@@ -1222,7 +1254,6 @@ class TMix_qwen3gdn_base(TMix_qwen3):
 
 
         if self.use_short_conv:
-            self.conv_size = self.conv_size
             self.q_conv1d = ShortConvolution(
                 hidden_size=self.key_dim,
                 kernel_size=self.conv_size,
@@ -1241,11 +1272,18 @@ class TMix_qwen3gdn_base(TMix_qwen3):
                 bias=self.conv_bias,
                 activation='silu',
             )
+            if self.conv_zero_init:
+                self.q_conv1d.weight.data.zero_()
+                self.k_conv1d.weight.data.zero_()
+                self.v_conv1d.weight.data.zero_()
         else:
             print (
                 "ShortConvolution is crucial to the performance. "
                 "Do not turn it off, i.e., setting `use_short_conv=False` unless you know what you are doing.",
             )
+
+
+        self._reset_parameters()
 
     
     def forward(
@@ -1261,7 +1299,8 @@ class TMix_qwen3gdn_base(TMix_qwen3):
         use_cache: bool | None = False,
         **kwargs: Unpack[dict],
     ):
-        hidden_state = x
+        hidden_states = x
+        use_cache = False
 
         batch_size, q_len, _ = hidden_states.shape
         # change to inference mode.
@@ -1304,29 +1343,52 @@ class TMix_qwen3gdn_base(TMix_qwen3):
             q = F.silu(self.q_proj(hidden_states))
             k = F.silu(self.k_proj(hidden_states))
             v = F.silu(self.v_proj(hidden_states))
+        # if self.layer_idx == 1:
+        #     print (f"{q.shape=}")
+        #     print (f"{k.shape=}")
 
+        
         beta = self.b_proj(hidden_states).sigmoid()
+        beta = self.compute_beta(beta)
         
         q, k = (rearrange(x, "... (h d) -> ... h d", d=self.head_k_dim) for x in (q, k))
+        if self.config.use_qk_rmsnorm:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
+
         if self.num_v_heads > self.num_heads:
             q, k = (repeat(x, "... h d -> ... (h g) d", g=self.num_v_heads // self.num_heads) for x in (q, k))
         v = rearrange(v, "... (h d) -> ... h d", d=self.head_v_dim)
 
-        g = self.compute_qkg(x=x, hidden_state=hidden_state)
+        # repeat k/v heads if n_kv_heads < n_heads
+        # k = k.transpose(1,2)
+        # v = v.transpose(1,2)
+        # k = repeat_kv(k, self.num_key_value_groups)
+        # v = repeat_kv(v, self.num_key_value_groups)
+        # k = k.transpose(1,2)
+        # v = v.transpose(1,2)
+
+        k = repeat_kv_transposed(k, self.num_key_value_groups)
+        v = repeat_kv_transposed(v, self.num_key_value_groups)
+
+
+        g = self.compute_g(hidden_states=hidden_states)
         
         if self.allow_neg_eigval:
             beta = beta * 2.0
 
         recurrent_state = last_state["recurrent_state"] if last_state is not None else None
 
-        
         if mode == 'chunk':
             o, recurrent_state = self.chunk_attn(
                 q=q, k=k, v=v, g=g, beta=beta, initial_state=recurrent_state,
-                output_final_state=use_cache, cu_seqlens=cu_seqlens, use_qk_l2norm_in_kernel=True
+                output_final_state=use_cache, cu_seqlens=cu_seqlens, use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel
             )
         elif mode == "fused_recurrent":
-            o, recurrent_state = self.recurrent_attn()
+            o, recurrent_state = self.recurrent_attn(
+                q=q, k=k, v=v, g=g, beta=beta, initial_state=recurrent_state,
+                output_final_state=use_cache, cu_seqlens=cu_seqlens, use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel
+            )
         else:
             raise NotImplementedError(f"Not supported mode `{mode}`.")
         
@@ -1338,34 +1400,55 @@ class TMix_qwen3gdn_base(TMix_qwen3):
                 offset=q_len,
             )
 
-        if self.use_gate: # self.use_gate = True for kimi
+        if self.use_gate: # self.use_gate = True for kda
             g = rearrange(self.g_proj(hidden_states), '... (h d) -> ... h d', d=self.head_v_dim)
             o = self.o_norm(o, g)
         else:
             o = self.o_norm(o)
+        # print (f"{o.shape=}")
         o = rearrange(o, "b t h d -> b t (h d)")
+        # print (f"{self.n_embd=}")
+        # print (f"{self.dim_attn=}")
+        # print (f"{self.q_proj.weight.shape=}")
+        # print (f"{self.k_proj.weight.shape=}")
+        # print (f"{self.v_proj.weight.shape=}")
+        # print (f"{self.num_heads=}")
+        # print (f"{self.head_dim=}")
+        # print (f"{self.head_v_dim=}")
+        # print (f"{self.hidden_size=}")
+        # print (f"{self.o_proj.weight.shape=}")
+        # print (f"{o.shape=}")
         o = self.o_proj(o)
         if attention_mask is not None:
             o = pad_input(o.squeeze(0), indices, batch_size, q_len)
 
         attn_weights = torch.empty(0, device=x.device)
-        return x, v_first, TimeMixState(last_state.wkv_state, last_state.shift_state), attn_weights #, past_key_value
+        return o, v_first, None, attn_weights, past_key_values
 
-        #return x, None, past_key_value
+    def compute_beta(self, beta):
+        raise NotImplementedError()
+    def compute_g(self, hidden_states):
+        raise NotImplementedError()
+    def chunk_attn(
+        self, q, k, v, g, beta, initial_state,
+        output_final_state, cu_seqlens, use_qk_l2norm_in_kernel, *args, **kwargs
+    ):
+        raise NotImplementedError()
+    def recurrent_attn(
+        self, q, k, v, g, beta, initial_state,
+        output_final_state, cu_seqlens, use_qk_l2norm_in_kernel, *args, **kwargs
+    ):
+        raise NotImplementedError()
+    
 
-
-from fla.ops.gated_delta_rule import chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
 class TMix_qwen3gdn(TMix_qwen3gdn_base):
     def __init__(self, config:Transformer_Config, layer_id):
-
         super().__init__(config, layer_id)
-
         self.use_gate = config.use_gate
-
         self.reset_parameters()
 
-    def reset_parameters(self):
-        print("Called reset_parameters on TMix_qwen3gdn layer ", self.layer_id)
+    def _reset_parameters(self):
+        print("Called _reset_parameters on TMix_qwen3gdn layer ", self.layer_id)
         self.a_proj = nn.Linear(self.hidden_size, self.num_v_heads, bias=False)
         self.b_proj = nn.Linear(self.hidden_size, self.num_v_heads, bias=False)
 
@@ -1390,7 +1473,7 @@ class TMix_qwen3gdn(TMix_qwen3gdn_base):
             self.o_norm = RMSNorm(self.head_v_dim, eps=self.norm_eps, dtype=torch.float32)
             
     def forward(self, *args, **kwargs):
-        super().forward(*args, **kwargs)
+        return super().forward(*args, **kwargs)
     def compute_beta(self, beta):
         return beta
     def compute_g(self, hidden_states):
@@ -1429,16 +1512,15 @@ class TMix_qwen3gdn(TMix_qwen3gdn_base):
         )
         return o, recurrent_state
 
-from fla.ops.kda import chunk_kda, fused_recurrent_kda
-from fla.ops.kda.gate import fused_kda_gate
-class TMix_qwen3kimi(TMix_qwen3gdn_base):
+
+class TMix_qwen3kda(TMix_qwen3gdn_base):
     def __init__(self, config:Transformer_Config, layer_id):
 
         super().__init__(config, layer_id)
         self.reset_parameters()
 
-    def reset_parameters(self):
-        print("Called reset_parameters on TMix_qwen3kimi layer ", self.layer_id)
+    def _reset_parameters(self):
+        print("Called _reset_parameters on TMix_qwen3kda layer ", self.layer_id)
         self.f_proj = nn.Sequential(
             nn.Linear(self.hidden_size, self.head_v_dim, bias=False),
             nn.Linear(self.head_v_dim, self.key_dim, bias=False),
@@ -1455,7 +1537,7 @@ class TMix_qwen3kimi(TMix_qwen3gdn_base):
         self.o_norm = FusedRMSNormGated(self.head_v_dim, activation="sigmoid", eps=self.norm_eps)
 
     def forward(self, *args, **kwargs):
-        super().forward(*args, **kwargs)
+        return super().forward(*args, **kwargs)
     def compute_beta(self, beta):
         if self.num_v_heads > self.num_heads:
             beta = repeat(beta, "... h -> ... (h g)") 
@@ -1523,10 +1605,12 @@ class CMix_qwen3(nn.Module):
         self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
         self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
         self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
-        self.act_fn = torch.nn.SiLU() #ACT2FN[config.hidden_act]
+        self.act_fn = torch.nn.SiLU() #ACT2FN[config.hidden_act]G
 
     def forward(self, x, last_model_state:ModelState):
-        last_state = last_model_state.block_states[self.layer_id].channel_mix_state
+        last_state = None
+        if last_model_state is not None:
+            last_state = last_model_state.block_states[self.layer_id].channel_mix_state
         return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x)), last_state
 
 class Qwen3DecoderLayer(nn.Module):
@@ -1549,6 +1633,10 @@ class Qwen3DecoderLayer(nn.Module):
             self.self_attn = TMix_qwen3rwkv6(args, layer_id)
         elif 'rwkv7' in args.attention_type:
             self.self_attn = TMix_qwen3rwkv7(args, layer_id)
+        elif 'gdn' in args.attention_type:
+            self.self_attn = TMix_qwen3gdn(args, layer_id)
+        elif 'kda' in args.attention_type:
+            self.self_attn = TMix_qwen3kda(args, layer_id)
         else:
             self.self_attn = TMix_qwen3(args, layer_id)
         self.default_time_mix_state_factory = self.self_attn.get_default_state_factory() if hasattr(self.self_attn, 'get_default_state_factory') else lambda x, c, r: TimeMixState()
@@ -1561,13 +1649,41 @@ class Qwen3DecoderLayer(nn.Module):
         self.default_channel_mix_state_factory = cmix.get_default_state_factory() if hasattr(cmix, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
         self.mlp = cmix
 
-    def forward(self, x:Tensor, reset_mask:Tensor, v_first:Tensor, last_model_state:ModelState, shared:Shared, output_attentions:bool, output_post_attention_hidden_states:bool):
+    def forward(self, x:Tensor, reset_mask:Tensor, v_first:Tensor, last_model_state:ModelState, shared:Shared, output_attentions:bool, output_post_attention_hidden_states:bool, past_key_values:Cache, use_cache:bool):
         s = last_model_state
         if self.teacher_attn is not None:
-            dx, _, last_timemix_state, attentions = self.teacher_attn(self.input_layernorm(x), reset_mask, v_first, s, shared, output_attentions)
-            student_dx, v_first, student_last_timemix_state, student_attentions = self.self_attn(self.input_layernorm(x), reset_mask, v_first, s, shared, output_attentions)
+            dx, _, last_timemix_state, attentions, past_key_values = self.teacher_attn(
+                x=self.input_layernorm(x),
+                reset_mask=reset_mask,
+                v_first=v_first,
+                last_model_state=s,
+                shared=shared,
+                output_attentions=output_attentions,
+                past_key_values=past_key_values,
+                use_cache=use_cache
+            )
+            student_dx, v_first, student_last_timemix_state, student_attentions, past_key_values = self.self_attn(
+                x=self.input_layernorm(x),
+                reset_mask=reset_mask,
+                v_first=v_first,
+                last_model_state=s,
+                shared=shared,
+                output_attentions=output_attentions,
+                past_key_values=past_key_values,
+                use_cache=use_cache
+            )
         else:
-            dx, v_first, last_timemix_state, attentions = self.self_attn(self.input_layernorm(x), reset_mask, v_first, s, shared, output_attentions)
+            dx, v_first, last_timemix_state, attentions, past_key_values = self.self_attn(
+                x=self.input_layernorm(x),
+                reset_mask=reset_mask,
+                v_first=v_first,
+                last_model_state=s,
+                shared=shared,
+                output_attentions=output_attentions,
+                past_key_values=past_key_values,
+                use_cache=use_cache
+            )
+                
             student_dx, student_last_timemix_state, student_attentions = None, None, None
         if output_post_attention_hidden_states:            
             post_attention_hidden_states = dx
@@ -1582,17 +1698,17 @@ class Qwen3DecoderLayer(nn.Module):
         x = x + dx
         dx, last_chanmix_state = self.mlp(self.post_attention_layernorm(x), s)
         x = x + dx
-        return x, v_first, s, attentions, post_attention_hidden_states, student_attentions, student_post_attention_hidden_states
+        return x, v_first, s, attentions, post_attention_hidden_states, student_attentions, student_post_attention_hidden_states, past_key_values
 
-def ckpt(block:Qwen3DecoderLayer, *block_args):
+def ckpt(block:Qwen3DecoderLayer, *block_args, **block_kwargs):
     if block.training and block.config.train.grad_cp == 1: # and 'fsdp' not in block.config.train.strategy: # FSDP has its own checkpointing wrapper
         #if "deepspeed" in block.config.train.strategy:
         #    results = deepspeed.checkpointing.checkpoint(block, *block_args)
         #else:
         # NOTE - both deepspeed.checkpointing.checkpoint and use_reentrant=True failed miserably (bad loss) when used in conjunction with requires_grad=False params and grad_cp with deepspeed
-        results = torch.utils.checkpoint.checkpoint(block, *block_args, use_reentrant=False)
+        results = torch.utils.checkpoint.checkpoint(block, *block_args, **block_kwargs, use_reentrant=False)
     else:
-        results = block(*block_args)
+        results = block(*block_args, **block_kwargs)
     return results
 
 class Qwen3Decoder(nn.Module):
@@ -1611,18 +1727,50 @@ class Qwen3Decoder(nn.Module):
         )
         self.norm = Qwen3RMSNorm(args.n_embd, eps=args.rms_norm_eps)
 
-    def forward_preamble(self, x, last_model_state:ModelState|None = None, ):
+    def prepare_shared(self, x):
         config : Transformer_Config = self.config.model
-
         B, T, C = x.size()
-
         shared = self.shared
         if config.rope is not None and T > shared.angles.size(0):
             max_ctx_len = max(config.ctx_len, (T + 15) // 16 * 16)
             shared.angles = generate_rotary_embedding(max_ctx_len, config.head_size, config.rope.base * config.rope.rebase, config.rope.rescale).to(self.norm.weight)
+        # print (shared.angles)
 
         assert (shared.angles.size(0) == 0 or T <= shared.angles.size(0)) or (shared.bias_mask.size(0) == 0 or T <= shared.bias_mask.size(0))
 
+    # def forward_preamble(
+    #     self, x,
+    #     last_model_state:ModelState|None = None,
+    #     past_key_values: Cache | list[torch.FloatTensor] | None = None
+    # ):
+    #     config : Transformer_Config = self.config.model
+    #     B, T, C = x.size()
+    #     self.prepare_shared(x)
+
+    #     # might need to be true in the future for BPTT support
+    #     requires_grad = self.training
+    #     if last_model_state is None:
+    #         last_model_state = ModelState()
+    #         for layer_id in range(config.n_layer):
+    #             layer = self.layers[layer_id]
+    #             last_model_state.block_states.append(BlockState(
+    #                 layer.default_time_mix_state_factory(x, config, requires_grad),
+    #                 layer.default_channel_mix_state_factory(x, config, requires_grad),
+    #             ))
+        
+    #     # might need to be true in the future for BPTT support
+    #     use_cache = config.use_cache
+    #     if use_cache and not isinstance(past_key_values, Cache):
+    #         past_key_values = Cache.from_legacy_cache(past_key_values)
+
+    #     return last_model_state, past_key_values
+
+    def forward_preamble(
+        self, x,
+        last_model_state:ModelState|None = None
+    ):
+        config : Transformer_Config = self.config.model
+        self.prepare_shared(x)
         # might need to be true in the future for BPTT support
         requires_grad = self.training
         if last_model_state is None:
@@ -1636,7 +1784,47 @@ class Qwen3Decoder(nn.Module):
 
         return last_model_state
 
-    def forward(self, token_ids:Tensor|list, last_model_state:ModelState|None = None, output_hidden_states:bool=False, output_attentions:bool=False, output_post_attention_hidden_states:bool=False):
+    # def forward_preamble(
+    #     self, x,
+    #     last_model_state:ModelState|None = None
+    # ):
+    #     config : Transformer_Config = self.config.model
+
+    #     # might need to be true in the future for BPTT support
+    #     requires_grad = self.training
+    #     if last_model_state is None:
+    #         last_model_state = ModelState()
+    #         for layer_id in range(config.n_layer):
+    #             layer = self.layers[layer_id]
+    #             last_model_state.block_states.append(BlockState(
+    #                 layer.default_time_mix_state_factory(x, config, requires_grad),
+    #                 layer.default_channel_mix_state_factory(x, config, requires_grad),
+    #             ))
+
+    #     return last_model_state
+
+    # def forward_preamble_gdnlike(
+    #     self, x,
+    #     past_key_values: Cache | list[torch.FloatTensor] | None = None
+    # ):
+    #     config : Transformer_Config = self.config.model
+
+    #     # might need to be true in the future for BPTT support
+    #     use_cache = config.use_cache
+    #     if use_cache and not isinstance(past_key_values, Cache):
+    #         past_key_values = Cache.from_legacy_cache(past_key_values)
+    #     return past_key_values
+
+    def forward(
+        self,
+        token_ids:Tensor|list,
+        last_model_state:ModelState|None = None,
+        output_hidden_states:bool=False,
+        output_attentions:bool=False,
+        output_post_attention_hidden_states:bool=False,
+        use_cache: bool | None = None,
+        past_key_values: Cache | list[torch.FloatTensor] | None = None, # for gdn, kda
+    ):
         config : Transformer_Config = self.config.model
         if isinstance(token_ids, Tensor):
             B, T = token_ids.size()
@@ -1651,7 +1839,30 @@ class Qwen3Decoder(nn.Module):
         x = self.embed_tokens(token_ids)
 
         v_first = torch.tensor([], device=x.device)
+
+        # attention_type = config.attention_type
+        # from pprint import pprint
+        # print (attention_type)
+        # pprint (config)
+        # print ("\n")
+        
+        # if any([
+        #     'rwkv6' in attention_type,
+        #     'gla' in attention_type,
+        #     'rwkv7' in attention_type,
+        # ]):
+        #     last_model_state = self.forward_preamble(x, last_model_state)
+        # elif attention_type in ['gdn', 'kda']:
+        #     past_key_values = self.forward_preamble_gdnlike(x, past_key_values)
+
+
         last_model_state = self.forward_preamble(x, last_model_state)
+        use_cache = use_cache if use_cache is not None else (config.use_cache if not self.training else False)
+        if use_cache and not isinstance(past_key_values, Cache):
+            past_key_values = Cache.from_legacy_cache(past_key_values)
+        
+        # else:
+        #     past_key_values = self.forward_preamble_gdnlike(x, past_key_values)
 
         hidden_states_outputs, attentions_outputs, post_attention_hidden_states_outputs = (), (), ()
         student_hidden_states_outputs, student_attentions_outputs, student_post_attention_hidden_states_outputs = (), (), ()
@@ -1659,7 +1870,10 @@ class Qwen3Decoder(nn.Module):
             hidden_states_outputs += (x,)
             student_hidden_states_outputs += (x,)
         for decoder_layer in self.layers:
-            x, v_first, last_model_state, attentions, post_attention_hidden_states, student_attentions, student_post_attention_hidden_states = ckpt(decoder_layer, x, reset_mask, v_first, last_model_state, self.shared, output_attentions, output_post_attention_hidden_states)
+            x, v_first, last_model_state, attentions, post_attention_hidden_states, student_attentions, student_post_attention_hidden_states, past_key_values = ckpt(
+                decoder_layer,
+                x, reset_mask, v_first, last_model_state, self.shared, output_attentions, output_post_attention_hidden_states, past_key_values=past_key_values, use_cache=use_cache
+            )
             hidden_states_outputs += (x,)
             student_hidden_states_outputs += (x,)
             if output_attentions:
@@ -1676,7 +1890,7 @@ class Qwen3Decoder(nn.Module):
             hidden_states_outputs += (x,)
             student_hidden_states_outputs += (x,)
 
-        return LLMOutput(x, last_model_state, hidden_states_outputs, attentions_outputs, post_attention_hidden_states_outputs, student_attentions_outputs, student_post_attention_hidden_states_outputs)
+        return LLMOutput(x, last_model_state, hidden_states_outputs, attentions_outputs, post_attention_hidden_states_outputs, student_attentions_outputs, student_post_attention_hidden_states_outputs, past_key_values)
         #return x, last_model_state, hidden_states_outputs, attentions_outputs, post_attention_hidden_states_outputs # FIXME - not updating state at all
 
 class Model_qwen3(nn.Module): # Qwen3CausalLM
@@ -1784,9 +1998,23 @@ class Model_qwen3(nn.Module): # Qwen3CausalLM
             # self.model.norm.requires_grad_(False)
             # self.lm_head.requires_grad_(False)
 
-    def forward(self, token_ids:Tensor|list, last_model_state:ModelState|None = None, output_hidden_states:bool=False, output_attentions:bool=False, output_post_attention_hidden_states:bool=False):
+    def forward(
+        self,
+        token_ids:Tensor|list,
+        last_model_state:ModelState|None = None,
+        output_hidden_states:bool=False,
+        output_attentions:bool=False,
+        output_post_attention_hidden_states:bool=False,
+        **kwargs
+    ):
         #print("teacher q min, max", float(self.model.layers[0].self_attn.q_proj.weight.min()), float(self.model.layers[0].self_attn.q_proj.weight.max()))
-        results = self.model(token_ids, last_model_state=last_model_state, output_hidden_states=output_hidden_states, output_attentions=output_attentions, output_post_attention_hidden_states=output_post_attention_hidden_states)
+        results = self.model(
+            token_ids,
+            last_model_state=last_model_state,
+            output_hidden_states=output_hidden_states,
+            output_attentions=output_attentions,
+            output_post_attention_hidden_states=output_post_attention_hidden_states
+        )
         results.logits = self.lm_head(results.logits)
         return results
     

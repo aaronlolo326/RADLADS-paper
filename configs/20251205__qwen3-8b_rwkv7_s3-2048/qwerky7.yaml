@@ -6,4 +6,4 @@ model:
   use_pos_emb: 1
   balance_state: 0
   groupnorm_att: 1
-  use_qk_norm: 0
+  use_qk_rmsnorm: 0

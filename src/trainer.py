@@ -33,7 +33,7 @@ class train_callback(pl.Callback):
         trainer.fit_loop.epoch_progress.current.completed = self.config.train.epoch_begin
         config = self.config
         if config.train.attention_distillation_stage == 1:
-            pl_module.save_weights(f"{config.runtime.proj_path}/rwkv-init.pth")
+            pl_module.save_weights(f"{config.runtime.proj_path}/ckpt-init.pth")
 
     def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
         config = self.config
@@ -69,7 +69,7 @@ class train_callback(pl.Callback):
 
             real_progress = pl_module.get_real_progress()
             if real_progress >= 1:
-                pl_module.save_weights(f"{config.runtime.proj_path}/rwkv-final.pth")
+                pl_module.save_weights(f"{config.runtime.proj_path}/ckpt-final.pth")
                 print("!!!TRAINING COMPLETE!!!")
                 exit(0)
 
@@ -157,7 +157,7 @@ class train_callback(pl.Callback):
         if config.train.magic_prime > 0:
             expand_factor = 1
             if int(real_global_step) == int(config.train.magic_prime * expand_factor // self.config.runtime.global_step_bsz) - 1:
-                pl_module.save_weights(f"{config.runtime.proj_path}/rwkv-final.pth")
+                pl_module.save_weights(f"{config.runtime.proj_path}/ckpt-final.pth")
                 
 
     def on_train_epoch_start(self, trainer, pl_module):
@@ -175,7 +175,7 @@ class train_callback(pl.Callback):
         real_current_epoch = trainer.current_epoch
         if (config.train.epoch_save > 0 and (real_current_epoch+1) % config.train.epoch_save == 0) or (real_current_epoch == config.runtime.epoch_count - 1):
             try:
-                pl_module.save_weights(f"{config.runtime.proj_path}/rwkv-{trainer.current_epoch}.pth")
+                pl_module.save_weights(f"{config.runtime.proj_path}/ckpt-{trainer.current_epoch}.pth")
             except Exception as e:
                 print('Error\n\n', e, '\n\n')
 

@@ -174,7 +174,7 @@ if __name__ == "__main__":
     from safetensors.torch import load_file
 
     # NOTE - this import MUST come AFTER the JIT gets disabled above or that disabling won't take effect correctly for the model
-    import models.qwen2
+    # import models.qwen2
 
     strategy_obj = config.train.strategy
     if 'fsdp' in config.train.strategy:

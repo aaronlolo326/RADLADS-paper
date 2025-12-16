@@ -1,7 +1,10 @@
 import os, math, gc, importlib
 import torch
 import torch.linalg
-import torch.utils.checkpoint
+# import torch.utils.checkpoint
+import torch.utils.checkpoint as ckpt
+ckpt.set_checkpoint_debug_enabled(True)
+
 # torch._C._jit_set_profiling_executor(True)
 # torch._C._jit_set_profiling_mode(True)
 import torch.nn as nn
@@ -192,6 +195,10 @@ class LightningModelWrapper(pl.LightningModule):
             #     FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
             # ):
             save_dict = model.state_dict()
+            # Source - https://stackoverflow.com/a
+            # Posted by Om Rastogi
+            # Retrieved 2025-12-14, License - CC BY-SA 4.0
+
             if self.trainer.global_rank == 0:
                 for k in list(save_dict.keys()):
                     if k.startswith('teacher.'):
@@ -264,6 +271,10 @@ class LightningModelWrapper(pl.LightningModule):
             # FIXME - this provides copies of tied weights, which isn't desirable for all models or when we want them to actually be tied
             if 'lm_head.weight' not in load_dict:
                 load_dict['lm_head.weight'] = load_dict['model.embed_tokens.weight']
+            
+            # See model weights shape
+            # for i, (name, tensor) in enumerate(load_dict.items()):
+            #     print(f"{i}: {name} → shape={tensor.shape}, dtype={tensor.dtype}")
                 
             # FIXME - this gives the inline teacher the copies it needs of the self_attn weights
             if config.train.attention_distillation_stage == 1:
@@ -318,6 +329,9 @@ class LightningModelWrapper(pl.LightningModule):
                     state_dict = load_dict.copy()
                     if metadata is not None:
                         state_dict._metadata = metadata
+
+
+
 
                     local_metadata = {} if metadata is None else metadata.get(prefix[:-1], {})
                 
@@ -446,7 +460,7 @@ class LightningModelWrapper(pl.LightningModule):
         return False
 
 
-    def _get_loss_logits_preds(self, batch, batch_idx, last_model_state):
+    def _get_loss_logits_preds(self, batch, batch_idx, last_model_state, past_key_values):
         x, y = batch
 
         B, T = x.shape
@@ -492,6 +506,7 @@ class LightningModelWrapper(pl.LightningModule):
             logits = torch.tensor([], device=x.device)
             preds = torch.zeros_like(y)
             next_model_state = last_model_state
+            next_key_values = past_key_values
         else:
             
             if self.training and self.config.train.attention_distillation_stage == 23:
@@ -531,7 +546,7 @@ class LightningModelWrapper(pl.LightningModule):
                     hidden_states_loss = hidden_states_loss + torch.linalg.vector_norm(teacher_results.hidden_states[layer_id] - results.hidden_states[layer_id], dim=-1).mean() / (len(results.hidden_states)-2) * (results.hidden_states[0].size(-1) ** -0.5)
                 reported_loss = training_loss = distillation_loss + hidden_states_loss
                 logits = torch.tensor([], device=x.device)
-                return reported_loss, training_loss, logits, preds, last_model_state
+                return reported_loss, training_loss, logits, preds, last_model_state, past_key_values
 
             # if self.training and self.config.train.attention_distillation_stage == 2:
             #     results = self.model.forward(x, output_hidden_states=True, output_attentions=False, output_post_attention_hidden_states=False)
@@ -557,12 +572,15 @@ class LightningModelWrapper(pl.LightningModule):
             if isinstance(results, tuple):
                 logits = results[0]
                 next_model_state = results[1]
+                next_key_values = results[-1]
             elif isinstance(results, torch.Tensor):
                 logits = results
                 next_model_state = last_model_state
+                next_key_values = past_key_values
             else:
                 logits = results.logits
                 next_model_state = last_model_state
+                next_key_values = past_key_values
 
             flat_student_logits = logits.view(-1, logits.size(-1))
             flat_labels = y.view(-1)
@@ -667,7 +685,7 @@ class LightningModelWrapper(pl.LightningModule):
         if training_loss.isnan().any():
             raise Exception("loss was NaN")
 
-        return reported_loss, training_loss, logits, preds, next_model_state
+        return reported_loss, training_loss, logits, preds, next_model_state, next_key_values
     
     def get_real_global_step(self): return int(self.trainer.global_step + self.config.train.epoch_begin * self.config.runtime.epoch_global_steps)
     def get_real_tokens(self): return self.get_real_global_step() * self.config.model.ctx_len * self.config.runtime.global_step_bsz
@@ -691,8 +709,9 @@ class LightningModelWrapper(pl.LightningModule):
         inputs, labels = batch
 
         model_state = None
+        key_values = None
 
-        loss, training_loss, logits, preds, model_state = self._get_loss_logits_preds((inputs, labels), batch_idx, model_state)
+        loss, training_loss, logits, preds, model_state, key_values = self._get_loss_logits_preds((inputs, labels), batch_idx, model_state, key_values)
         margs = metrics.MetricArgs(inputs, logits, preds, labels, loss)
         # FIXME - sync from other devices/nodes here
         for metric in self.metrics.values():

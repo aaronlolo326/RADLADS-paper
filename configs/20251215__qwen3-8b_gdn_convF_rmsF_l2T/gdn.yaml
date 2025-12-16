@@ -1,0 +1,13 @@
+model:
+  tmix: qwen3gdn
+  attention_type: gdn # rwkv7 # rwkv7_wind_backstepping_longhead # rwkv7_wind_replaystepping_longhead # 
+  mode: chunk
+  expand_v: 1
+  use_gate: true
+  use_short_conv: false
+  allow_neg_eigval: false
+  conv_size: 4
+  conv_bias: false
+  conv_zero_init: false
+  use_qk_l2norm_in_kernel: true
+  use_qk_rmsnorm: false
