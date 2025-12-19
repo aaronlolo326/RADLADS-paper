@@ -5,9 +5,9 @@ model:
   expand_v: 1
   use_gate: true
   allow_neg_eigval: false
-  use_short_conv: false
+  use_short_conv: true
   conv_size: 4
   conv_bias: false
-  conv_zero_init: true
+  conv_zero_init: false
   use_qk_l2norm_in_kernel: true
   use_qk_rmsnorm: false
