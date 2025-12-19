@@ -334,6 +334,7 @@ class Qwen3RMSNorm(nn.Module):
         """
         super().__init__()
         self.weight = nn.Parameter(torch.ones(hidden_size))
+        # print (f"1 {self.weight.dtype=}")
         self.variance_epsilon = eps
 
     def forward(self, hidden_states):
@@ -341,7 +342,10 @@ class Qwen3RMSNorm(nn.Module):
         hidden_states = hidden_states.to(torch.float32)
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        # print (f"2 {self.weight.dtype=}") # not sure why step 2 is bf32 but step 1 is bf16
+        normed = self.weight * hidden_states.to(input_dtype)
+        # print (f"{normed.dtype=}")
+        return normed.to(input_dtype)
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
@@ -603,7 +607,7 @@ class TMix_qwen3rwkv6(TMix_qwen3):
         if config.groupnorm_att:
             self.ln_x = nn.GroupNorm(self.num_heads, dim_att, eps=self.head_dim * 1e-5)
 
-    def reset_parameters(self):
+    def reset_parameters(self):            
         print("Called reset_parameters on TMix_qwen3rwkv6 layer ", self.layer_id)
 
         module = self
@@ -1300,6 +1304,7 @@ class TMix_qwen3gdn_base(TMix_qwen3):
         **kwargs: Unpack[dict],
     ):
         hidden_states = x
+        # print (f"{hidden_states.dtype=}")
         use_cache = False
 
         batch_size, q_len, _ = hidden_states.shape
@@ -1352,9 +1357,11 @@ class TMix_qwen3gdn_base(TMix_qwen3):
         beta = self.compute_beta(beta)
         
         q, k = (rearrange(x, "... (h d) -> ... h d", d=self.head_k_dim) for x in (q, k))
+        # print (f"1 {q.dtype=}; {k.dtype=}")
         if self.config.use_qk_rmsnorm:
             q = self.q_norm(q)
             k = self.k_norm(k)
+        # print (f"2 {q.dtype=}; {k.dtype=}")
 
         if self.num_v_heads > self.num_heads:
             q, k = (repeat(x, "... h d -> ... (h g) d", g=self.num_v_heads // self.num_heads) for x in (q, k))

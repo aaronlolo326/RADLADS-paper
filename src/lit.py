@@ -62,6 +62,10 @@ class LightningModelWrapper(pl.LightningModule):
 
         self.trainer = trainer
 
+        # from pprint import pprint
+        # pprint (self.config)
+        # pprint (self.trainer.precision) # bf16-mixed
+
     def configure_model(self):
         if self.configured:
             return
@@ -119,8 +123,10 @@ class LightningModelWrapper(pl.LightningModule):
         dtype_map = {"bf16-true":torch.bfloat16, "bf16-mixed":torch.bfloat16, "16-true":torch.float16, "16-mixed":torch.float16, "32-true":torch.float32}
         dtype = dtype_map[self.trainer.precision]
 
+        print (f"{self.trainer.precision=}")
         print("Moving model to dtype ", dtype)
         model.to(dtype=dtype)
+        # print (f"1 {model.q_norm.weight.dtype=}")
         if 'fsdp' in self.config.train.strategy:
             if self.trainer.global_rank == 0:
                 if do_reset:
@@ -134,6 +140,7 @@ class LightningModelWrapper(pl.LightningModule):
         else:
             print("Moving model to empty on", self.device)
             model.to_empty(device=self.device, recurse=True)
+        # print (f"2 {model.q_norm.weight.dtype=}")
 
         if self.trainer.global_rank == 0:
             # reset parameters, if needed
@@ -288,6 +295,7 @@ class LightningModelWrapper(pl.LightningModule):
         if 'deepspeed_stage_3' not in config.train.strategy:
             model.load_state_dict(load_dict, strict=strict)
             print("Loaded ", ckpt_path)       
+            # breakpoint()
             return
 
         # # simple version that takes a lot more CPU RAM

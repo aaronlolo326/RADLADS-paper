@@ -194,6 +194,7 @@ if __name__ == "__main__":
 
 
     # FIXME - why use_distributed_sampler=False? was this an oversight in the original repo? is this related to replace_sampler_ddp from Bo's code?
+    # print (f"0 {config.train.precision=}")
     trainer = Trainer(
                         use_distributed_sampler=False, 
                         enable_checkpointing=False,

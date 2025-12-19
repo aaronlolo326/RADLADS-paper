@@ -17,7 +17,8 @@ from pprint import pprint
 RESULTS_ROOT = "/home/hei/RADLADS-paper/results"
 OUT_DIR = "/home/hei/RADLADS-paper/plots"
 
-selected_tasks = "winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai,mmlu,mathqa,race,gsm8k".split(",")
+all_tasks = "winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai,mmlu,mathqa,race,gsm8k".split(",")
+selected_tasks = "hellaswag,lambada_openai,mmlu".split(",")
 
 pretrained_models = [
     "Qwen__Qwen2.5-7B-Instruct",
@@ -109,6 +110,8 @@ def load_results(results_root: str, runs_name: List[str], exc_runs: List[str], f
                 print (a,b,c,d)
                 if not c.startswith("4"):
                     continue
+            if c.startswith("4"):
+                continue
             run_name_step, ckpt = model_dir.rsplit("__", maxsplit=1)
             if runs_name == []:
                 proceed = True
@@ -262,7 +265,7 @@ def plot_aggregate(data, metric: str, out_dir: str, date_str: str, runs_name: Li
     total_height = 0.8
     bar_height = total_height / len(models)
 
-    fig, ax = plt.subplots(figsize=(13,len(tasks) * 1))
+    fig, ax = plt.subplots(figsize=(13,len(all_tasks) * 1))
 
     # Use a consistent color for each model based on model name
     color_map = plt.get_cmap('tab20')

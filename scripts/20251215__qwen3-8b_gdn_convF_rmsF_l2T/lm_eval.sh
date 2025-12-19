@@ -73,22 +73,22 @@ for i in "${checkpoints[@]}"; do
     fi
 done
 
-# for i in "${checkpoints[@]}"; do
-#     CKPT_PATH="${STEP2_PTH_PATH}/ckpt-${i}.pth"
-#     if [ -f "$CKPT_PATH" ]; then
-#         echo "Evaluating checkpoint: $CKPT_PATH"
-#         CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
-#         python run_lm_eval.py \
-#             -c ${qwen_yaml} \
-#             -c ${qwerky7_yaml} \
-#             --path "${CKPT_PATH}" \
-#             --is_pretrained no \
-#             --bsz 16 \
-#             --tokenizer_name ${tokenizer} \
-#             --tasks winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai,mmlu,mathqa,race
-#             # gsm8k
-#     else
-#         echo "Checkpoint does not exist: $CKPT_PATH, skipping."
-#     fi
-# done
+for i in "${checkpoints[@]}"; do
+    CKPT_PATH="${STEP2_PTH_PATH}/ckpt-${i}.pth"
+    if [ -f "$CKPT_PATH" ]; then
+        echo "Evaluating checkpoint: $CKPT_PATH"
+        CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
+        python run_lm_eval.py \
+            -c ${qwen_yaml} \
+            -c ${la_yaml} \
+            --path "${CKPT_PATH}" \
+            --is_pretrained no \
+            --bsz 16 \
+            --tokenizer_name ${tokenizer} \
+            --tasks ${tasks}
+            # gsm8k
+    else
+        echo "Checkpoint does not exist: $CKPT_PATH, skipping."
+    fi
+done
 

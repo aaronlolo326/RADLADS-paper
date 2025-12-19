@@ -7,7 +7,7 @@ RUN_NAME="20251215__qwen3-8b_gdn_convF_rmsT_l2T"
 
 STEP0_DIR="${RUN_NAME}-1"
 STEP1_DIR="${RUN_NAME}-2"
-STEP2_DIR="${RUN_NAME}-4-2k"
+STEP2_DIR="${RUN_NAME}-4-1k"
 
 
 STEP0_PTH_PATH="${out_pths_dir}/${STEP0_DIR}"
