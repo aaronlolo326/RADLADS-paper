@@ -1,9 +1,11 @@
+CUDA_VISIBLE_DEVICES=1,2,3,4,5,6,7 #0,1,3,4,5,6,7
+
 export USERNAME=$(whoami)
 pths_dir=/work/${USERNAME}/pths
 out_pths_dir=/work/${USERNAME}/radlads/out/pths
 out_hf_dir=/work/${USERNAME}/radlads/out/hf
 
-RUN_NAME="20251219__qwen3-8b_gdn_convT_rmsF_l2T"
+RUN_NAME="20251219__qwen3-8b_gdn_convF_rmsT_l2T"
 
 STEP0_DIR="${RUN_NAME}-1"
 STEP1_DIR="${RUN_NAME}-2"

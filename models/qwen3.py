@@ -1322,32 +1322,43 @@ class TMix_qwen3gdn_base(TMix_qwen3):
             indices, cu_seqlens, _ = get_unpad_data(attention_mask[:, -q_len:])
             hidden_states = index_first_axis(rearrange(hidden_states, "b s ... -> (b s) ..."), indices).unsqueeze(0)
 
+        q = self.q_proj(hidden_states)
+        k = self.k_proj(hidden_states)
+        v = self.v_proj(hidden_states)
+        # print (f"1 {q.dtype=}; {k.dtype=}")
+        if self.config.use_qk_rmsnorm:
+            q, k = (rearrange(x, "... (h d) -> ... h d", d=self.head_k_dim) for x in (q, k))
+            q = self.q_norm(q)
+            k = self.k_norm(k)
+            q, k = (rearrange(x, "... h d -> ... (h d)", d=self.head_k_dim) for x in (q, k))
+        # print (f"2 {q.dtype=}; {k.dtype=}")
+
         if self.use_short_conv:
             conv_state_q, conv_state_k, conv_state_v = None, None, None
             if last_state is not None:
                 conv_state_q, conv_state_k, conv_state_v = last_state["conv_state"]
             q, conv_state_q = self.q_conv1d(
-                x=self.q_proj(hidden_states),
+                x=q,
                 cache=conv_state_q,
                 output_final_state=use_cache,
                 cu_seqlens=cu_seqlens,
             )
             k, conv_state_k = self.k_conv1d(
-                x=self.k_proj(hidden_states),
+                x=k,
                 cache=conv_state_k,
                 output_final_state=use_cache,
                 cu_seqlens=cu_seqlens,
             )
             v, conv_state_v = self.v_conv1d(
-                x=self.v_proj(hidden_states),
+                x=v,
                 cache=conv_state_v,
                 output_final_state=use_cache,
                 cu_seqlens=cu_seqlens,
             )
         else:
-            q = F.silu(self.q_proj(hidden_states))
-            k = F.silu(self.k_proj(hidden_states))
-            v = F.silu(self.v_proj(hidden_states))
+            q = F.silu(q)
+            k = F.silu(k)
+            v = F.silu(v)
         # if self.layer_idx == 1:
         #     print (f"{q.shape=}")
         #     print (f"{k.shape=}")
@@ -1357,11 +1368,6 @@ class TMix_qwen3gdn_base(TMix_qwen3):
         beta = self.compute_beta(beta)
         
         q, k = (rearrange(x, "... (h d) -> ... h d", d=self.head_k_dim) for x in (q, k))
-        # print (f"1 {q.dtype=}; {k.dtype=}")
-        if self.config.use_qk_rmsnorm:
-            q = self.q_norm(q)
-            k = self.k_norm(k)
-        # print (f"2 {q.dtype=}; {k.dtype=}")
 
         if self.num_v_heads > self.num_heads:
             q, k = (repeat(x, "... h d -> ... (h g) d", g=self.num_v_heads // self.num_heads) for x in (q, k))

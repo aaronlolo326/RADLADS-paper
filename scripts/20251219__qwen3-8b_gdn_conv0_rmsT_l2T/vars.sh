@@ -1,3 +1,5 @@
+CUDA_VISIBLE_DEVICES=1,2,3,4,5,6,7 #0,1,3,4,5,6,7
+
 export USERNAME=$(whoami)
 pths_dir=/work/${USERNAME}/pths
 out_pths_dir=/work/${USERNAME}/radlads/out/pths
