@@ -110,8 +110,8 @@ def load_results(results_root: str, runs_name: List[str], exc_runs: List[str], f
                 print (a,b,c,d)
                 if not c.startswith("4"):
                     continue
-            if c.startswith("4"):
-                continue
+            # if c.startswith("4"):
+            #     continue
             run_name_step, ckpt = model_dir.rsplit("__", maxsplit=1)
             if runs_name == []:
                 proceed = True
