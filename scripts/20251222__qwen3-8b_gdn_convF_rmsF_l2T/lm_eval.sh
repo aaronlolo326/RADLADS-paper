@@ -6,6 +6,9 @@ export BASE="${1:-/work/${USERNAME}}/radlads"
 export HF_CACHE_DIR="${BASE}/.cache/huggingface/hub"
 export MAIN_PROCESS_PORT=29503
 
+bsz=32
+tasks=winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai,mmlu,mathqa,race
+
 # logs_dir="logs/logs_1201"
 # mkdir -p ${logs_dir}
 
@@ -17,23 +20,22 @@ CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
 python run_lm_eval.py \
     --path ${ORIGINAL_MODEL_PATH} \
     --is_pretrained yes \
-    --bsz 16 \
-    --tasks winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai,mmlu,mathqa,race
+    --bsz ${bsz} \
+    --tasks ${tasks}
     # gsm8k
 #     # --tasks winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa
 
 
-
-start=0
-end=20
-stride=1
-checkpoints=('init')
-for i in $(seq $start $stride $end); do
-    checkpoints+=("$i")
-done
+checkpoints=()
+checkpoints+=('init')
+# start=0
+# end=20
+# stride=1
+# for i in $(seq $start $stride $end); do
+#     checkpoints+=("$i")
+# done
 checkpoints+=('final')
 # tasks=mmlu,lambada_openai,hellaswag
-tasks=winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai,mmlu,mathqa,race
 
 for i in "${checkpoints[@]}"; do
     CKPT_PATH="${STEP0_PTH_PATH}/ckpt-${i}.pth"
@@ -45,7 +47,7 @@ for i in "${checkpoints[@]}"; do
             -c ${la_yaml} \
             --path "${CKPT_PATH}" \
             --is_pretrained no \
-            --bsz 16 \
+            --bsz ${bsz} \
             --tokenizer_name ${tokenizer} \
             --tasks ${tasks}
             # gsm8k
@@ -64,7 +66,7 @@ for i in "${checkpoints[@]}"; do
             -c ${la_yaml} \
             --path "${CKPT_PATH}" \
             --is_pretrained no \
-            --bsz 16 \
+            --bsz ${bsz} \
             --tokenizer_name ${tokenizer} \
             --tasks ${tasks}
             # gsm8k
@@ -83,7 +85,7 @@ for i in "${checkpoints[@]}"; do
             -c ${la_yaml} \
             --path "${CKPT_PATH}" \
             --is_pretrained no \
-            --bsz 16 \
+            --bsz ${bsz} \
             --tokenizer_name ${tokenizer} \
             --tasks ${tasks}
             # gsm8k
@@ -91,4 +93,6 @@ for i in "${checkpoints[@]}"; do
         echo "Checkpoint does not exist: $CKPT_PATH, skipping."
     fi
 done
+
+python ~/exp.py --gpus 0
 
