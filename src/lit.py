@@ -470,7 +470,7 @@ class LightningModelWrapper(pl.LightningModule):
 
     def _get_loss_logits_preds(self, batch, batch_idx, last_model_state, past_key_values):
         x, y = batch
-
+        # breakpoint()
         B, T = x.shape
         causal_mask = torch.full((T, T), fill_value=-torch.inf, dtype=torch.bfloat16, device=x.device).triu(1)
         causal_mask = causal_mask[None, None, :, :].expand(B, 1, -1, -1)
