@@ -4,6 +4,7 @@ import argparse
 import glob
 import json
 import re
+import csv
 from functools import cmp_to_key
 from collections import defaultdict
 
@@ -107,7 +108,7 @@ def load_results(results_root: str, runs_name: List[str], exc_runs: List[str], f
         else:
             a,b,c,d = parse_model_name(model_dir)
             if step2_only:
-                print (a,b,c,d)
+                # print (a,b,c,d)
                 if not c.startswith("4"):
                     continue
             # if c.startswith("4"):
@@ -137,8 +138,8 @@ def load_results(results_root: str, runs_name: List[str], exc_runs: List[str], f
                 acc_norm = task_res.get("acc_norm,none", None)
                 # map to renamed keys
                 data[task_name][model_dir] = {
-                    "acc": acc,
-                    "acc_norm": acc_norm,
+                    "acc": acc * 100 if acc is not None else None,
+                    "acc_norm": acc_norm * 100 if acc_norm is not None else None,
                 }
 
     return data
@@ -316,6 +317,77 @@ def plot_aggregate(data, metric: str, out_dir: str, date_str: str, runs_name: Li
     print(f"Saved task and aggregate plots to: {out_path}")
 
 
+def generate_csv(data, metric: str, out_dir: str):
+    """
+    Generate CSV file where columns are tasks, rows are model names, and values are the metric.
+    Column order: arc_challenge, arc_easy, gsm8k, mathqa, mmlu, piqa, race, winogrande, then the rest.
+    Rows are sorted by increasing average score.
+    """
+    # Define the preferred column order
+    preferred_tasks = ["arc_challenge", "arc_easy", "gsm8k", "mathqa", "mmlu", "piqa", "race", "winogrande", "hellaswag", "lambada_openai", "openbookqa"]
+    column_order = preferred_tasks
+    # Get all tasks from data
+    # all_tasks_in_data = set(data.keys())
+    
+    # Build column order: preferred tasks first (if they exist), then the rest sorted
+    # column_order = []
+    # for task in preferred_tasks:
+    #     if task in all_tasks_in_data:
+    #         column_order.append(task)
+            # all_tasks_in_data.remove(task)
+    
+    # Add the remaining tasks in sorted order
+    # column_order.extend(sorted(all_tasks_in_data))
+    
+    # Get all models from data
+    all_models = set()
+    for task_data in data.values():
+        all_models.update(task_data.keys())
+    
+    # Calculate average score for each model and collect data
+    model_data = []
+    for model in all_models:
+        scores = []
+        row_data = {}
+        for task in column_order:
+            val = data.get(task, {}).get(model, {}).get(metric)
+            row_data[task] = val
+            if val is not None:
+                scores.append(val)
+            else:
+                scores.append(-1)
+        
+        # Calculate average (only for non-None values)
+        avg_score = sum(scores) / len([x for x in scores if x != -1]) if scores else 0.0
+        model_data.append((model, avg_score, row_data))
+    
+    # Sort by increasing average score
+    model_data.sort(key=lambda x: x[1])
+    
+    # Write CSV file
+    os.makedirs(out_dir, exist_ok=True)
+    csv_filename = f"all_results_{metric}.csv"
+    csv_path = os.path.join(out_dir, csv_filename)
+    
+    with open(csv_path, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        
+        # Write header
+        writer.writerow(["model"] + column_order +  ["avg_score"])
+        
+        # Write data rows
+        for model, avg_score, row_data in model_data:
+            row = [model]
+            for task in column_order:
+                val = row_data[task]
+                # Write empty string for None values, or the value itself
+                row.append("" if val is None else val)
+            row += [avg_score]
+            writer.writerow(row)
+    
+    print(f"Saved CSV file to: {csv_path}")
+
+
 def main():
 
     parser = argparse.ArgumentParser(description="plot.py")
@@ -324,6 +396,7 @@ def main():
     parser.add_argument("--date_str", help="date_str", default="",)
     parser.add_argument("--final_only", help="final ckpt only", action="store_true")
     parser.add_argument("--step2_only", help="step 2 ckpt only", action="store_true")
+    parser.add_argument("--csv", help="gen csv", action="store_true")
     # parser.add_argument("--age", type=int, help="Your age", default=30)
     args = parser.parse_args()
 
@@ -343,6 +416,11 @@ def main():
     # aggregate over all tasks for each metric
     plot_aggregate(data, "acc", OUT_DIR, date_str=args.date_str, runs_name=runs_name)
     plot_aggregate(data, "acc_norm", OUT_DIR, date_str=args.date_str, runs_name=runs_name)
+    
+    # generate CSV files
+    if args.csv:
+        generate_csv(data, "acc", OUT_DIR)
+        generate_csv(data, "acc_norm", OUT_DIR)
 
 if __name__ == "__main__":
     main()
