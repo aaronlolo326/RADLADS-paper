@@ -18,7 +18,8 @@ from pprint import pprint
 RESULTS_ROOT = "/home/hei/RADLADS-paper/results"
 OUT_DIR = "/home/hei/RADLADS-paper/plots"
 
-all_tasks = "winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai,mmlu,mathqa,race,gsm8k".split(",")
+all_tasks = ["arc_challenge", "arc_easy", "gsm8k", "mathqa", "mmlu", "piqa", "race", "winogrande", "hellaswag", "lambada_openai", "openbookqa"]
+unsupported_tasks = []
 selected_tasks = "hellaswag,lambada_openai,mmlu".split(",")
 
 pretrained_models = [
@@ -134,13 +135,18 @@ def load_results(results_root: str, runs_name: List[str], exc_runs: List[str], f
                 j = json.load(f)
 
             for task_name, task_res in j.items():
-                acc = task_res.get("acc,none", None)
+                if task_name in ['gsm8k']:
+                    key = "exact_match,strict-match"
+                else:
+                    key = "acc,none"
+                acc = task_res.get(key, None)
                 acc_norm = task_res.get("acc_norm,none", None)
                 # map to renamed keys
                 data[task_name][model_dir] = {
-                    "acc": acc * 100 if acc is not None else None,
-                    "acc_norm": acc_norm * 100 if acc_norm is not None else None,
+                    "acc": float(f"{acc * 100:.2f}") if acc is not None else None,
+                    "acc_norm": float(f"{acc_norm * 100:.2f}") if acc_norm is not None else None,
                 }
+                # print (task_name, acc)
 
     return data
 
@@ -296,7 +302,7 @@ def plot_aggregate(data, metric: str, out_dir: str, date_str: str, runs_name: Li
     ax.set_yticks(y)
     ax.set_yticklabels(tasks)
     ax.set_xlabel("Score")
-    ax.set_xlim(0, 0.9)
+    ax.set_xlim(0, 90)
     # Ensure legend shows the same color as bars
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles[::-1], labels[::-1], loc='lower left', bbox_to_anchor=(0.6, 0.2), bbox_transform=fig.transFigure)
@@ -349,16 +355,24 @@ def generate_csv(data, metric: str, out_dir: str):
     for model in all_models:
         scores = []
         row_data = {}
+        # show_model = True
         for task in column_order:
             val = data.get(task, {}).get(model, {}).get(metric)
             row_data[task] = val
             if val is not None:
                 scores.append(val)
             else:
+                # if task in unsupported_tasks:
                 scores.append(-1)
+                # else:
+                #     show_model = False
+                    # break
+        # if not show_model:
+        #     continue
         
         # Calculate average (only for non-None values)
-        avg_score = sum(scores) / len([x for x in scores if x != -1]) if scores else 0.0
+        scores_ = [x for x in scores if x != -1]
+        avg_score = sum(scores_) / len(scores_) if scores_ else 0.0
         model_data.append((model, avg_score, row_data))
     
     # Sort by increasing average score
@@ -420,7 +434,7 @@ def main():
     # generate CSV files
     if args.csv:
         generate_csv(data, "acc", OUT_DIR)
-        generate_csv(data, "acc_norm", OUT_DIR)
+        # generate_csv(data, "acc_norm", OUT_DIR)
 
 if __name__ == "__main__":
     main()
