@@ -1,14 +1,14 @@
 #!/bin/bash
 source "$(dirname "$0")/vars.sh"
-which activate
-source activate base+
+source $(conda info --base)/etc/profile.d/conda.sh
+conda activate base+
 
 DATE_STR="20251222"
 
 python plot.py \
     --date_str ${DATE_STR} \
     --runs_name "" \
-    --exc_runs 20251205__qwen3-8b_rwkv7_s3-2048,L28-D3584-qwerky7_qwen2,20251212__qwen3-8b_gdn \
+    --exc_runs 20251205__qwen3-8b_rwkv7_s3-2048,L28-D3584-qwerky7_qwen2,20251212__qwen3-8b_gdn,qwen2-7b_rwkv7_s3-512 \
     --final_only \
     --csv \
     --step2_only
