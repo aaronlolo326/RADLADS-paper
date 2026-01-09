@@ -57,6 +57,7 @@ class LightningModelWrapper(pl.LightningModule):
         self.model = model
         self.config = config
         self.teacher = teacher
+        # __import__('fpdb').ForkedPdb().set_trace()
         self.metrics = dict(loss=metrics.Loss(), acc=metrics.Accuracy())
         self.configured = False
 
@@ -70,12 +71,13 @@ class LightningModelWrapper(pl.LightningModule):
         if self.configured:
             return
         self.configured = True
+        # __import__('fpdb').ForkedPdb().set_trace()
 
         print("Running configure_model")
 
         print("configuring student")
         self.configure_specific_model(self.model, maybe_do_reset=True)
-
+        # import pdb;pdb.set_trace()
         if self.teacher is not None:
             print("configuring teacher")
             self.configure_specific_model(self.teacher, maybe_do_reset=False)
@@ -109,6 +111,7 @@ class LightningModelWrapper(pl.LightningModule):
 
     def configure_specific_model(self, model, maybe_do_reset):
         do_reset = False
+        # __import__('fpdb').ForkedPdb().set_trace()
         if maybe_do_reset:
             if self.config.train is not None:
                 if self.config.train.load_model == '' or (self.config.train.load_partial and self.config.train.attention_distillation_stage in (0,1)):
@@ -491,6 +494,8 @@ class LightningModelWrapper(pl.LightningModule):
             output_post_attention_hidden_states = self.config.train.attention_distillation_stage in (11, 1)
             # special code for attention output and/or attention matrix loss
             if self.config.model.hf_path != '':
+                #TODO : print out the structure of self.model
+                # __import__('fpdb').ForkedPdb().set_trace()
                 results = self.model.forward(x, output_hidden_states=False, output_attentions=True)
                 training_loss = torch.stack(results.attentions, dim=0).mean()
                 #reported_loss = results.loss
@@ -520,6 +525,7 @@ class LightningModelWrapper(pl.LightningModule):
             if self.training and self.config.train.attention_distillation_stage == 23:
                 results = self.model.forward(x, output_hidden_states=True, output_attentions=False, output_post_attention_hidden_states=False)
                 self.teacher.eval()
+                # __import__('fpdb').ForkedPdb().set_trace() #TODO - print out the structure of self.teacher
                 with torch.no_grad():
                     teacher_results = self.teacher.forward(x, output_hidden_states=True)
                 #reported_loss = training_loss = torch.linalg.vector_norm(torch.cat(teacher_results.hidden_states[1:], dim=0) - torch.cat(results.hidden_states[1:], dim=0), dim=-1).mean() * (results.hidden_states[0].size(-1) ** -0.5)
@@ -536,6 +542,7 @@ class LightningModelWrapper(pl.LightningModule):
                 n_chunks = (flat_student_logits.size(0) + chunk_len - 1) // chunk_len
 
                 # memory saving measure, because otherwise kl_div tried to allocate everything all at once
+                # TODO - replacing kl_div with liger kernel 
                 distillation_loss = torch.tensor(0.0, device=flat_student_logits.device, dtype=flat_student_logits.dtype)
                 for c in range(0, flat_student_logits.size(0), chunk_len):
                     student_log_softmax = F.log_softmax(flat_student_logits[c:c+chunk_len], dim=-1)
@@ -617,6 +624,7 @@ class LightningModelWrapper(pl.LightningModule):
                 preds = logits.argmax(dim=-1)
 
             if self.training and self.teacher is not None:
+                #TODO print out the structure of self.teacher
                 self.teacher.eval()
                 with torch.no_grad():
                     teacher_results = self.teacher.forward(x)

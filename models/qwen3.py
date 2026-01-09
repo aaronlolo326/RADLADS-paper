@@ -5,6 +5,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 from torch import Tensor
 from typing import Tuple, Optional
+from flash_attn import flash_attn_func
 
 from src.state import ModelState, BlockState, ChannelMixState, TimeMixState, Shared
 
@@ -24,6 +25,8 @@ from src.logger import print0 as print
 
 from fla.models.utils import Cache
 from transformers.processing_utils import Unpack
+
+from liger_kernel.transformers.rope import liger_rotary_pos_emb
 
 ATTENTION_TYPE = os.environ["RWKV_ATTENTION_TYPE"]
 print (f"From line 26 of qwen3.py: {ATTENTION_TYPE=}")
@@ -495,7 +498,10 @@ class TMix_qwen3(nn.Module):
         #cos, sin = self.rotary_emb(v, seq_len=kv_seq_len)
         # print (f"{shared.angles.unbind()=}")
         cos, sin = shared.angles.unbind(0)
-        q, k = apply_rotary_pos_emb(q, k, cos, sin)
+        if self.config.liger_kernel_enabled and self.config.liger_patch_rope:
+            q, k = liger_rotary_pos_emb(q, k, cos, sin)
+        else:
+            q, k = apply_rotary_pos_emb(q, k, cos, sin)
         q = q.to(v.dtype)
         k = k.to(v.dtype)
 
@@ -522,8 +528,19 @@ class TMix_qwen3(nn.Module):
         else:
             attn_weights = torch.empty(0, device=x.device)
 
-        y = nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=is_causal)
-        y = y.transpose(1,2).reshape(B,L,D)
+        # y = nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=is_causal)
+        # y = y.transpose(1,2).reshape(B,L,D)
+        q_f = q.transpose(1, 2).contiguous()   # (B, L, H, Dh)
+        k_f = k.transpose(1, 2).contiguous()   # (B, L, KVH, Dh)
+        v_f = v.transpose(1, 2).contiguous()   # (B, L, KVH, Dh)
+
+        y_f = flash_attn_func(
+            q_f, k_f, v_f,
+            dropout_p=0.0,
+            softmax_scale=None,     # default = 1/sqrt(Dh)
+            causal=is_causal
+        )  # (B, L, H, Dh)
+        y = y_f.reshape(B, L, D).contiguous()
         y = self.o_proj(y)
         return y, v_first, tmix_state, attn_weights, past_key_values
 
@@ -1767,7 +1784,12 @@ class Qwen3DecoderLayer(nn.Module):
             student_post_attention_hidden_states = torch.empty(0, device=x.device)
             
         x = x + dx
-        dx, last_chanmix_state = self.mlp(self.post_attention_layernorm(x), s)
+        
+        if self.config.model.liger_kernel_enabled and self.config.model.liger_patch_swiglu:
+            dx = self.mlp(self.post_attention_layernorm(x))
+        else:
+            dx, last_chanmix_state = self.mlp(self.post_attention_layernorm(x), s)
+
         x = x + dx
         return x, v_first, s, attentions, post_attention_hidden_states, student_attentions, student_post_attention_hidden_states, past_key_values
 
@@ -1985,8 +2007,26 @@ class Model_qwen3(nn.Module): # Qwen3CausalLM
             return
 
         self.model = Qwen3Decoder(self.config)
-
+        # import pdb;pdb.set_trace()
+        if self.config.model.liger_kernel_enabled:
+            self._apply_manual_liger_patch(self.model) 
         self.lm_head = nn.Linear(self.config.model.n_embd, self.config.model.vocab_size, bias=False)
+
+    def _apply_manual_liger_patch(self, base_model):
+        '''
+        # The model instance already exists, so we need to additionally patch the
+        # instance variables that reference already-instantiated modules
+        '''
+        from liger_kernel.transformers.monkey_patch import _patch_rms_norm_module, _patch_swiglu_module, LigerSwiGLUMLP
+
+        if self.config.model.liger_patch_rms_norm:
+            _patch_rms_norm_module(base_model.norm)
+        for decoder_layer in base_model.layers:
+            if self.config.model.liger_patch_swiglu:
+                _patch_swiglu_module(decoder_layer.mlp, LigerSwiGLUMLP)
+            if self.config.model.liger_patch_rms_norm:
+                _patch_rms_norm_module(decoder_layer.input_layernorm)
+                _patch_rms_norm_module(decoder_layer.post_attention_layernorm)
 
     def set_grads(self):
         train_config = self.config.train
