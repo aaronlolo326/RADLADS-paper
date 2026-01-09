@@ -149,8 +149,10 @@ class LightningModelWrapper(pl.LightningModule):
                 if self.config.train is not None:
                     if self.config.train.load_model == '' or (self.config.train.load_partial and self.config.train.attention_distillation_stage in (0,1)):
                         print("Resetting parameters")
+                        # breakpoint()
                         for submodule in model.modules():
                             if hasattr(submodule, 'reset_parameters'):
+                                # print(f"Resetting parameters of {submodule}")
                                 submodule.reset_parameters()
 
             if 'deepspeed_stage_3' in self.config.train.strategy or 'fsdp' in self.config.train.strategy:
@@ -288,7 +290,27 @@ class LightningModelWrapper(pl.LightningModule):
                 keys = list(load_dict.keys())
                 for k in keys:
                     if '.self_attn.' in k:
-                        load_dict[k.replace('self_attn', 'teacher_attn')] = load_dict[k]                            
+                        load_dict[k.replace('self_attn', 'teacher_attn')] = load_dict[k]
+                # 20260108
+                non_copy_params = []
+                if not config.train.qknorm_copy:
+                    # Remove all keys that contain the substring '.self_attn.[x].' where x is in a list of strings.
+                    # attn_key_substrings = ['q_proj', 'k_proj', 'v_proj', 'o_proj'] #, 'q_norm', 'k_norm']
+                    non_copy_params += ['q_norm', 'k_norm']
+                if not config.train.qkvoproj_copy:
+                    non_copy_params += ['q_proj', 'k_proj', 'v_proj', 'o_proj']
+                if non_copy_params:
+                    keys_to_remove = []
+                    for k in load_dict.keys():
+                        for x in non_copy_params:
+                            if f'.self_attn.{x}.' in k:
+                                keys_to_remove.append(k)
+                                break
+                    for k in keys_to_remove:
+                        del load_dict[k]
+            # print ("-----------------------------------------------------------")
+            # for i, (name, tensor) in enumerate(load_dict.items()):
+            #     print(f"{i}: {name} → shape={tensor.shape}, dtype={tensor.dtype}")
 
         strict = not config.train.load_partial #and config.train.attention_distillation_stage != 2
 

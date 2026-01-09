@@ -9,5 +9,5 @@ python3 train.py \
     -c ${la_yaml} \
     -c configs/${RUN_NAME}/qwen3-8b-instructteacher.yaml \
     -c configs/${RUN_NAME}/distill3.yaml \
-    --train.load_model ${out_pths_dir}/${RUN_NAME}-2-2k/ckpt-final.pth \
+    --train.load_model ${out_pths_dir}/${RUN_NAME}-2/ckpt-final.pth \
     --train.proj_name ${RUN_NAME}

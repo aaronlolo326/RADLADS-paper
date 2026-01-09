@@ -10,7 +10,7 @@ train:
 
   data_type: "binidx" 
   data_file: "/work/hei/data/dclm-10B" #data/minipile_qwen2" 
-  my_exit_tokens: 1500087317 #1491785955
+  my_exit_tokens: 500000000 #1491785955
   magic_prime: 732461
 
   optimizer: dsfusedadamw

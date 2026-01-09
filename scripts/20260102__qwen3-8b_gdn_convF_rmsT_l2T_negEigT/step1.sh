@@ -9,7 +9,7 @@ python3 train.py \
     -c ${la_yaml} \
     -c configs/${RUN_NAME}/qwen3-8b-instructteacher.yaml \
     -c configs/${RUN_NAME}/distill2.yaml \
-    --train.load_model ${out_pths_dir}/${RUN_NAME}-1-2k/ckpt-final.pth \
+    --train.load_model ${out_pths_dir}/${RUN_NAME}-1/ckpt-final.pth \
     --train.proj_name ${RUN_NAME} #\
     # > logs/20251215.log 2>&1
 

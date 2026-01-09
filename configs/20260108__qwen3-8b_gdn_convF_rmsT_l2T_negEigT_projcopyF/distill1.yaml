@@ -2,13 +2,15 @@ model:
   ctx_len: 512
 
 train:
+  wandb: qwen2rwkv
+  
   proj_suffix: 1
   train_stage: 3
   load_partial: 1
 
   data_type: "binidx" 
-  data_file: "data/dclm-10B" #data/minipile_qwen2" 
-  my_exit_tokens: 100000000 # 1491785955
+  data_file: "/work/hei/data/dclm-10B" #data/minipile_qwen2" 
+  my_exit_tokens: 200000000 # 1491785955
   # dclm-10B
   # --my_exit_tokens 1500087317 --magic_prime 5859677 --ctx_len 256
   # --my_exit_tokens 1500087317 --magic_prime 2929793 --ctx_len 512
@@ -45,7 +47,7 @@ train:
   adam_eps: 1e-8 
   weight_decay: 0
 
-  devices: 1
+  devices: 7
   num_nodes: 1
   micro_bsz: 4
   accumulate_grad_batches: 1 # total bsz 32
@@ -54,3 +56,7 @@ train:
   ds_bucket_mb: 200 # set to 2 for consumer GPUs, set to 200 for A100 / H100 (affects speed & vram usage)
     
   attention_distillation_stage: 1
+  epoch_save: 1
+
+  qkvoproj_copy: false
+  qknorm_copy: true

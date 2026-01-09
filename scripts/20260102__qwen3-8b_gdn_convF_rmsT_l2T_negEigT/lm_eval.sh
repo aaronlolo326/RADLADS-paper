@@ -1,7 +1,7 @@
 #!/bin/bash
 source "$(dirname "$0")/vars.sh"
 echo $RUN_NAME
-# export CUDA_VISIBLE_DEVICES=0 #1,3,5 #0,1,2,3,4,5,6,7 #0,1,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0 #1,3,5 #0,1,2,3,4,5,6,7 #0,1,3,4,5,6,7
 export BASE="${1:-/work/${USERNAME}}/radlads"
 export HF_CACHE_DIR="${BASE}/.cache/huggingface/hub"
 export MAIN_PROCESS_PORT=29503
@@ -13,20 +13,18 @@ bsz=32
 
 tasks=winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai,mmlu,mathqa,race
 tasks=gsm8k
-
-
-# # Originally pretrained ##
-# ORIGINAL_MODEL_NAME="Qwen3-8B-Base"
-# ORIGINAL_MODEL_PATH="Qwen/${ORIGINAL_MODEL_NAME}"
-# MODEL_PATH="${BASE}/pths/${ORIGINAL_MODEL_NAME}/pretrained.pth"
-# CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
-# python run_lm_eval.py \
-#     --path ${ORIGINAL_MODEL_PATH} \
-#     -c ${qwen_yaml} \
-#     --is_pretrained yes \
-#     --bsz ${bsz} \
-#     --tasks ${tasks}
-#     # --tasks winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa
+# Originally pretrained ##
+ORIGINAL_MODEL_NAME="Qwen3-8B-Base"
+ORIGINAL_MODEL_PATH="Qwen/${ORIGINAL_MODEL_NAME}"
+MODEL_PATH="${BASE}/pths/${ORIGINAL_MODEL_NAME}/pretrained.pth"
+CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
+python run_lm_eval.py \
+    --path ${ORIGINAL_MODEL_PATH} \
+    -c ${qwen_yaml} \
+    --is_pretrained yes \
+    --bsz ${bsz} \
+    --tasks ${tasks}
+    # --tasks winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa
 
 
 
@@ -95,6 +93,9 @@ checkpoints+=('final')
 
 
 
+
+
+
 for i in "${checkpoints[@]}"; do
     CKPT_PATH="${STEP2_PTH_PATH}/ckpt-${i}.pth"
     if [ -f "$CKPT_PATH" ]; then
@@ -105,15 +106,14 @@ for i in "${checkpoints[@]}"; do
             -c ${la_yaml} \
             --path "${CKPT_PATH}" \
             --is_pretrained no \
+            --bsz ${bsz} \
             --tokenizer_name ${tokenizer} \
-            --tasks ${tasks} #\
-            # --limit 48
-            # --bsz ${bsz} \
+            --tasks ${tasks}
             # gsm8k
     else
         echo "Checkpoint does not exist: $CKPT_PATH, skipping."
     fi
 done
 
-python ~/exp.py --gpus ${CUDA_VISIBLE_DEVICES}
+python ~/exp.py --gpus 0
 

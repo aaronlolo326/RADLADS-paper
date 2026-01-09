@@ -42,12 +42,57 @@ from tqdm import tqdm
 from dataclasses import dataclass
 import typing
 
+from huggingface_hub import login
+
+# Optionally get your HuggingFace token from environment or prompt
+hf_token = os.environ.get("HF_TOKEN")
+if hf_token is not None:
+    login(token=hf_token)
+else:
+    try:
+        login()
+    except Exception as e:
+        print("Warning: HuggingFace login failed or was skipped. You may need to manually authenticate if you download private datasets.")
+
+
+
+use_cache = True
+precision = '32'
+
+# Switch-case style logic for CUDA_VISIBLE_DEVICES and configs (1-5)
+device = int(os.environ.get("CUDA_VISIBLE_DEVICES", None))  # Choose device/config by setting $DEVICE=1..5
+print (f"{device=}")
+# if device == 1:
+#     use_batch_all_time = True
+#     pad8mul = True
+#     bsz = 16
+# elif device == 2:
+#     use_batch_all_time = True
+#     pad8mul = False
+#     bsz = 16
+# elif device == 3:
+#     use_batch_all_time = True
+#     pad8mul = True
+#     bsz = 1
+# elif device == 4:
+#     use_batch_all_time = True
+#     pad8mul = False
+#     bsz = 1
+# elif device == 5:
+#     use_batch_all_time = False
+#     pad8mul = False
+#     bsz = 1
+# else:
+use_batch_all_time = True
+pad8mul = True
+bsz = 24
+
 @dataclass(kw_only=True)
 class CLI_Config:
     path: str
     tasks: str = 'lambada_openai' # arc_challenge, arc_easy, headqa, openbookqa, hellaswag, winogrande, piqa, record, copa, storycloze_2016
-    bsz: int = 48
-    precision: int | str = '32'
+    bsz: int = bsz
+    precision: int | str = precision
     num_fewshot: int | None = None
     seed: int | None = None
     recurrent: int = 1
@@ -79,8 +124,13 @@ if config.log_path:
     os.makedirs(logits_dir, exist_ok=True)
 
 # Load existing results if they exist, then merge with new results
+# if device == 0:
 results_file = f'{results_dir}/lm_eval_results.json'
 results_file_full = f'{results_dir}/lm_eval_results_full.json'
+# else:
+#     results_file = f'{results_dir}/20250107_results_batched{use_batch_all_time}_bsz{config.bsz}_8mul{pad8mul}_cache{use_cache}_prec{config.precision}.json'
+#     results_file_full = f'{results_dir}/20250107_full_batched{use_batch_all_time}_bsz{config.bsz}_8mul{pad8mul}_cache{use_cache}_prec{config.precision}.json'
+
 existing_results = {}
 if config.limit is None and os.path.exists(results_file):
     with open(results_file, 'r') as f:
@@ -238,13 +288,13 @@ class EvalHarnessAdapter(TemplateLM):
             # max_gen_toks = 1
             for i in range(max_gen_toks):
                 tokens = self.tokenizer.encode(ctx) if i == 0 else [token]
-                chunk_size = self.max_length
+                chunk_size = self.max_length # original
                 chunk_size = len(tokens)
                 # breakpoint()
                 # hei: below loop is for chunk_parallel?
                 while len(tokens) > 0:
                     # print (f"greedy_generate {len(tokens)=} {tokens[:self.max_length]=}")
-                    results = model.forward(tokens[:chunk_size], last_model_state=state, past_key_values=past_key_values)
+                    results = model.forward(tokens[:chunk_size], last_model_state=state, past_key_values=past_key_values, use_cache=use_cache)
                     if isinstance(results, tuple):
                         logits = results[0]
                         last_model_state = results[1]
@@ -307,7 +357,8 @@ class EvalHarnessAdapter(TemplateLM):
             attention_mask_batch_list = []
             # stack and pad to longest
             maxlen = max([len(x) for x in batch_input_ids])
-            # maxlen = (maxlen + 7) // 8 * 8 # round pad size up to nearest 8 for better GPU usage
+            if pad8mul:
+                maxlen = (maxlen + 7) // 8 * 8 # round pad size up to nearest 8 for better GPU usage
             for i in range(len(batch_input_ids)):
                 padded_len = (maxlen - len(batch_input_ids[i]))
                 # breakpoint()
@@ -331,7 +382,7 @@ class EvalHarnessAdapter(TemplateLM):
                 tokens = input_ids_padded_batch if i == 0 else last_token_batch
                 # breakpoint()
                 # print (f"batch_greedy_generate {tokens=}")
-                results = model.forward(tokens.to(device), last_model_state=last_model_state, past_key_values=past_key_values, attention_mask=attention_mask_batch)
+                results = model.forward(tokens.to(device), last_model_state=last_model_state, past_key_values=past_key_values, attention_mask=attention_mask_batch, use_cache=use_cache)
                 if isinstance(results, tuple):
                     logits = results[0]
                     last_model_state = results[1]
@@ -391,7 +442,8 @@ class EvalHarnessAdapter(TemplateLM):
         # sort requests by descending total length, so we batch together groups that have similar padded sizes, descending so we OOM early if at all
         B = self.batch_size_per_gpu
 
-        if B >= 1:
+        gen_switch = (B >= 1) if use_batch_all_time else (B > 1)
+        if gen_switch:
 
             for nb in tqdm(range(0, len(sorted_reqs), B), "Running batched greedy generation"):
                 ne = min(nb+B, len(sorted_reqs))
@@ -407,14 +459,14 @@ class EvalHarnessAdapter(TemplateLM):
         # print ("================="*30)
         # print ("\n"*6)
 
-        ### below is original inference impl
-        # elif B == 1:
-        #     for context, gen_kwargs in tqdm(reord.get_reordered(), "Running greedy generation"):
-        #         out_str, logits_list = self.greedy_generate(context)
+        ## below is original inference impl
+        else:
+            for context, gen_kwargs in tqdm(reord.get_reordered(), "Running greedy generation"):
+                out_str, logits_list = self.greedy_generate(context)
                 
-        #         for term in gen_kwargs['until']:
-        #             out_str = out_str.split(term)[0]
-        #         res.append(out_str)
+                for term in gen_kwargs['until']:
+                    out_str = out_str.split(term)[0]
+                res.append(out_str)
 
         return reord.get_original(res)
 
@@ -551,7 +603,8 @@ adapter = EvalHarnessAdapter(batch_size_per_gpu=config.bsz, tokenizer=tokenizer)
 limit = config.limit
 with torch.no_grad():
     with torch.amp.autocast(device_type='cuda', dtype=dtype):
-	    results = evaluator.simple_evaluate(
+        print (f"{dtype=}")
+        results = evaluator.simple_evaluate(
 	        model=adapter,
             # model_args="trust_remote_code=True",
 	        tasks=eval_tasks,
@@ -577,6 +630,6 @@ if limit is None:
     with open(results_file, 'w') as f:
         json.dump(existing_results, f, indent=2)
 
-if limit is not None and limit <= 32:
+if limit is not None and limit <= 100:
     with open(results_file_full, 'w') as f:
         json.dump(results, f, indent=2)

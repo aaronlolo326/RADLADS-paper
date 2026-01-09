@@ -3,7 +3,7 @@ source "$(dirname "$0")/vars.sh"
 source $(conda info --base)/etc/profile.d/conda.sh
 conda activate base+
 
-DATE_STR="20251231"
+DATE_STR=""
 
 # python plot.py \
 #     --date_str ${DATE_STR} \
@@ -15,5 +15,4 @@ DATE_STR="20251231"
 python plot.py \
     --date_str ${DATE_STR} \
     --runs_name ${RUN_NAME} \
-    --exc_runs "" \
-    --csv
+    --exc_runs ""

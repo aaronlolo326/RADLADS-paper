@@ -91,6 +91,7 @@ class Transformer_Config(Model_Config):
     use_qk_l2norm_in_kernel: bool = True
 
 
+
 @dataclass(kw_only=True)
 class FinchC2_Config(Transformer_Config):
     use_one_minus_w:int = 1
@@ -177,6 +178,9 @@ class Train_Config:
     data_file:str = ''
     validation_data_file:str = ''
     data_type:str = 'utf-8'
+
+    qkvoproj_copy: bool = True
+    qknorm_copy: bool = True
 
 @dataclass(kw_only=True)
 class TrainerCLI_Config:

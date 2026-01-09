@@ -444,21 +444,28 @@ class TMix_qwen3(nn.Module):
                 f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
                 f" and `num_heads`: {self.num_heads})."
             )
-        attention_bias = config.attention_bias
-        self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=attention_bias)
-        self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=attention_bias)
-        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=attention_bias)
-        self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=attention_bias)
-
+        self.attention_bias = config.attention_bias
         self.rms_norm_eps = config.rms_norm_eps
-        self.q_norm = Qwen3RMSNorm(self.head_dim, eps=self.rms_norm_eps)
-        self.k_norm = Qwen3RMSNorm(self.head_dim, eps=self.rms_norm_eps)
 
         # self.rotary_emb = Qwen3RotaryEmbedding(
         #     self.head_dim,
         #     max_position_embeddings=config.rope.max_seqlen,
         #     base=config.rope.base,
-        # )
+        # )exit
+        
+        self.reset_parameters_tmix_qwen3()
+
+    def reset_parameters_tmix_qwen3(self):
+        self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=self.attention_bias)
+        self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=self.attention_bias)
+        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=self.attention_bias)
+        self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=self.attention_bias)
+
+        self.q_norm = Qwen3RMSNorm(self.head_dim, eps=self.rms_norm_eps)
+        self.k_norm = Qwen3RMSNorm(self.head_dim, eps=self.rms_norm_eps)
+
+    def reset_parameters(self):
+        self.reset_parameters_tmix_qwen3()
 
     def forward(self, x, reset_mask, v_first, last_model_state:ModelState, shared:Shared, output_attentions:bool=False, past_key_values:Cache=None, **kwargs):
         if last_model_state is not None:
@@ -1245,6 +1252,9 @@ class TMix_qwen3gdn_base(TMix_qwen3):
 
         # TODO: check deterministic init?
 
+        # breakpoint()
+        super().reset_parameters()
+
         module = self
 
         C = self.hidden_size = self.config.n_embd
@@ -1285,7 +1295,6 @@ class TMix_qwen3gdn_base(TMix_qwen3):
                 "ShortConvolution is crucial to the performance. "
                 "Do not turn it off, i.e., setting `use_short_conv=False` unless you know what you are doing.",
             )
-
 
         self._reset_parameters()
 
@@ -1528,6 +1537,7 @@ class TMix_qwen3gdn(TMix_qwen3gdn_base):
             self.o_norm = FusedRMSNormGated(self.head_v_dim, eps=self.norm_eps)
         else:
             self.o_norm = RMSNorm(self.head_v_dim, eps=self.norm_eps, dtype=torch.float32)
+
             
     def forward(self, *args, **kwargs):
         return super().forward(*args, **kwargs)
@@ -1696,6 +1706,9 @@ class Qwen3DecoderLayer(nn.Module):
             self.self_attn = TMix_qwen3kda(args, layer_id)
         else:
             self.self_attn = TMix_qwen3(args, layer_id)
+
+        # print ("Init", self.layer_id, self.self_attn.q_norm.weight, torch.mean(self.self_attn.q_norm.weight), torch.var(self.self_attn.q_norm.weight))
+
         self.default_time_mix_state_factory = self.self_attn.get_default_state_factory() if hasattr(self.self_attn, 'get_default_state_factory') else lambda x, c, r: TimeMixState()
 
         self.teacher_attn = None
@@ -1769,6 +1782,8 @@ class Qwen3DecoderLayer(nn.Module):
         x = x + dx
         dx, last_chanmix_state = self.mlp(self.post_attention_layernorm(x), s)
         x = x + dx
+        
+        # print (self.layer_id, self.self_attn.q_norm.weight, torch.mean(self.self_attn.q_norm.weight), torch.var(self.self_attn.q_norm.weight))
         return x, v_first, s, attentions, post_attention_hidden_states, student_attentions, student_post_attention_hidden_states, past_key_values
 
 def ckpt(block:Qwen3DecoderLayer, *block_args, **block_kwargs):
