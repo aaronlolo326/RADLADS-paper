@@ -116,4 +116,3 @@ for i in "${checkpoints[@]}"; do
 done
 
 python ~/exp.py --gpus 0
-
