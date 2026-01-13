@@ -10,7 +10,7 @@ train:
 
   data_type: "binidx" 
   data_file: "/work/yanan/data/radlads/prolong-hf-decoded-text-source-shortmix" #data/minipile_qwen2" 
-  my_exit_tokens: 8000000000 # 13126905856 for hf-decoded-text-source-shortmix tokens
+  my_exit_tokens: 800000000 #0 # 13126905856 for hf-decoded-text-source-shortmix tokens
   magic_prime: 400559 #6409607 -- 2048, 801197 -- 16384, 400559 -- 32768
 
   optimizer: dsfusedadamw
@@ -27,7 +27,7 @@ train:
   devices: 8
   num_nodes: 1
   micro_bsz: 1 #2 # 12 originally w.2048 ctx
-  accumulate_grad_batches: 2 # 32 total bsz
+  accumulate_grad_batches: 1 # 32 total bsz
   strategy: deepspeed_stage_1 #fsdp #deepspeed_stage_1 # fsdp 
   grad_cp: 1
   ds_bucket_mb: 200 # set to 2 for consumer GPUs, set to 200 for A100 / H100 (affects speed & vram usage)
