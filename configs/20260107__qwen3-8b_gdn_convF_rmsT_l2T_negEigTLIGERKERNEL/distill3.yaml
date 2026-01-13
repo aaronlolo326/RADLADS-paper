@@ -9,7 +9,9 @@ train:
   load_partial: 0
 
   data_type: "binidx" 
-  data_file: "/work/yanan/data/radlads/prolong-hf-decoded-text-source-shortmix" #data/minipile_qwen2" 
+  data_file: 
+      - "/work/yanan/data/radlads/prolong-hf-decoded-text-source-shortmix" #data/minipile_qwen2" 
+
   my_exit_tokens: 800000000 #0 # 13126905856 for hf-decoded-text-source-shortmix tokens
   magic_prime: 400559 #6409607 -- 2048, 801197 -- 16384, 400559 -- 32768
 

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import datetime
 import typing
+from typing import List, Union # Add this import at the top
 
 @dataclass(kw_only=True)
 class Model_Config:
@@ -181,7 +182,7 @@ class Train_Config:
     precision:str = 'bf16'
     accumulate_grad_batches:int = 1
 
-    data_file:str = ''
+    data_file: Union[str, List[str]] = ''  #str = '' make it str or a list of strings
     validation_data_file:str = ''
     data_type:str = 'utf-8'
 

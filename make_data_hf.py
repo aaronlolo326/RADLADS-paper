@@ -36,7 +36,7 @@ where the data is repeated 3 times (each time with different shuffle)
 
 import argparse
 
-from datasets import load_dataset
+from datasets import load_dataset,concatenate_datasets
 
 from src.binidx import MMapIndexedDataset
 def index_file_path(prefix_path):
@@ -108,7 +108,7 @@ args = parser.parse_args()
 
 command = args.action #sys.argv[1].strip()
 DATASET_NAME = args.dataset #sys.argv[2].strip()
-OUT_NAME = os.path.splitext(os.path.basename(DATASET_NAME))[0]
+OUT_NAME = "/work/yanan/data/radlads/prolong12-qwen3-8b-tokenized-32768"   #os.path.splitext(os.path.basename(DATASET_NAME))[0]
 CTX_LEN = args.ctxlen #int(sys.argv[3].strip())
 COLUMN_NAME = args.column_name #'text'
 #if len(sys.argv) >= 5:
@@ -127,7 +127,12 @@ if command == 'build':
 
     print(f"### Convert {DATASET_NAME} to {OUT_NAME}.bin and {OUT_NAME}.idx")
 
-    dataset = load_dataset(DATASET_NAME, split='train', streaming=True)
+    if DATASET_NAME == "prolong":
+        d1 = load_dataset("xfxcwynlc/prolong1-qwen3-8b-tokenized-32768", split='train')
+        d2 = load_dataset("xfxcwynlc/prolong2-qwen3-8b-tokenized-32768", split='train')
+        dataset = concatenate_datasets([d1, d2]).to_iterable_dataset()
+    else:
+        dataset = load_dataset(DATASET_NAME, split='train', streaming=True)
 
     ########################################################################################################
 
@@ -141,11 +146,18 @@ if command == 'build':
         #print(len(list(example[COLUMN_NAME])))
         encodeds = []
         lens = []
-        for encoded in tokenizer(example[COLUMN_NAME], add_special_tokens=False)['input_ids']:
-            encoded.append(tokenizer.eos_token_id) # add the end of text token, e.g. 50256 for gpt2 bpe
-            encoded = np.asarray(encoded, dtype=token_dtype)
-            encodeds.append(encoded)
-            lens.append(len(encoded))
+        if COLUMN_NAME == 'input_ids':
+            # already tokenized
+            for encoded in example[COLUMN_NAME]:
+                encoded = np.asarray(encoded, dtype=token_dtype)
+                encodeds.append(encoded)
+                lens.append(len(encoded))
+        else:
+            for encoded in tokenizer(example[COLUMN_NAME], add_special_tokens=False)['input_ids']:
+                encoded.append(tokenizer.eos_token_id) # add the end of text token, e.g. 50256 for gpt2 bpe
+                encoded = np.asarray(encoded, dtype=token_dtype)
+                encodeds.append(encoded)
+                lens.append(len(encoded))
             #print(len(encoded))
         # note: I think eot should be prepended not appended... hmm. it's called "eot" though...
         out = {'ids': encodeds, 'len': lens}
