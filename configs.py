@@ -1,7 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass,field
 import datetime
 import typing
-from typing import List, Union # Add this import at the top
+from typing import List, Union, Sequence # Add this import at the top
 
 @dataclass(kw_only=True)
 class Model_Config:
@@ -182,7 +182,7 @@ class Train_Config:
     precision:str = 'bf16'
     accumulate_grad_batches:int = 1
 
-    data_file: Union[str, List[str]] = ''  #str = '' make it str or a list of strings
+    data_file:list = field(default_factory=list) #str = '' make it str or a list of strings
     validation_data_file:str = ''
     data_type:str = 'utf-8'
 

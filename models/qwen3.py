@@ -528,19 +528,19 @@ class TMix_qwen3(nn.Module):
         else:
             attn_weights = torch.empty(0, device=x.device)
 
-        # y = nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=is_causal)
-        # y = y.transpose(1,2).reshape(B,L,D)
-        q_f = q.transpose(1, 2).contiguous()   # (B, L, H, Dh)
-        k_f = k.transpose(1, 2).contiguous()   # (B, L, KVH, Dh)
-        v_f = v.transpose(1, 2).contiguous()   # (B, L, KVH, Dh)
+        y = nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=is_causal)
+        y = y.transpose(1,2).reshape(B,L,D)
+        # q_f = q.transpose(1, 2).contiguous()   # (B, L, H, Dh)
+        # k_f = k.transpose(1, 2).contiguous()   # (B, L, KVH, Dh)
+        # v_f = v.transpose(1, 2).contiguous()   # (B, L, KVH, Dh)
 
-        y_f = flash_attn_func(
-            q_f, k_f, v_f,
-            dropout_p=0.0,
-            softmax_scale=None,     # default = 1/sqrt(Dh)
-            causal=is_causal
-        )  # (B, L, H, Dh)
-        y = y_f.reshape(B, L, D).contiguous()
+        # y_f = flash_attn_func(
+        #     q_f, k_f, v_f,
+        #     dropout_p=0.0,
+        #     softmax_scale=None,     # default = 1/sqrt(Dh)
+        #     causal=is_causal
+        # )  # (B, L, H, Dh)
+        # y = y_f.reshape(B, L, D).contiguous()
         y = self.o_proj(y)
         return y, v_first, tmix_state, attn_weights, past_key_values
 
