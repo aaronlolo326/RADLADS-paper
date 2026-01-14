@@ -27,7 +27,7 @@ train:
   weight_decay: 0
 
   devices: 8
-  num_nodes: 1
+  num_nodes: 3
   micro_bsz: 1 #2 # 12 originally w.2048 ctx
   accumulate_grad_batches: 1 # 32 total bsz
   strategy: deepspeed_stage_1 #fsdp #deepspeed_stage_1 # fsdp 
