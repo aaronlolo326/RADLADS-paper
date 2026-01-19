@@ -1,0 +1,19 @@
+train:
+  teacher:
+    path: /work/aman/radlads/models/openPangu-R-7B-2512.pth
+    model:
+      __type__: configs.Transformer_Config
+      #tmix: qwen2
+      classname: openpangu
+      ctx_len: 512 # 4096
+      vocab_size: 153376
+      vocab_padding_idx: 151646 
+      num_key_value_heads: 8
+      head_size: 128
+      n_embd: 4096
+      dim_ffn: 16384
+      rms_norm_eps: 1e-5
+      n_layer: 27
+      rope:
+          __type__: configs.RoPE_Config
+          base: 16000000.0

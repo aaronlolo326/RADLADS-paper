@@ -24,9 +24,10 @@ from src.logger import print0 as print
 
 from fla.models.utils import Cache
 from transformers.processing_utils import Unpack
+from transformers.integrations import use_kernel_forward_from_hub
 
 ATTENTION_TYPE = os.environ["RWKV_ATTENTION_TYPE"]
-print (f"From line 26 of qwen3.py: {ATTENTION_TYPE=}")
+print (f"From line 26 of openpangu.py: {ATTENTION_TYPE=}")
 if ATTENTION_TYPE == 'rwkv6':
     from cuda import rwkv6_cuda
 elif 'gla' in ATTENTION_TYPE:
@@ -326,15 +327,38 @@ else:
     assert False, 'bad attention type specified'
 
 
-# Copied from transformers.models.llama.modeling_llama.LlamaRMSNorm with Llama->Qwen3
-class Qwen3RMSNorm(nn.Module):
+# # Copied from transformers.models.llama.modeling_llama.LlamaRMSNorm with Llama->Qwen3
+# class Qwen3RMSNorm(nn.Module):
+#     def __init__(self, hidden_size, eps=1e-6):
+#         """
+#         Qwen3RMSNorm is equivalent to T5LayerNorm
+#         """
+#         super().__init__()
+#         self.weight = nn.Parameter(torch.ones(hidden_size))
+#         # print (f"1 {self.weight.dtype=}")
+#         self.variance_epsilon = eps
+
+#     def forward(self, hidden_states):
+#         input_dtype = hidden_states.dtype
+#         hidden_states = hidden_states.to(torch.float32)
+#         variance = hidden_states.pow(2).mean(-1, keepdim=True)
+#         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+#         # print (f"2 {self.weight.dtype=}") # not sure why step 2 is bf32 but step 1 is bf16
+#         normed = self.weight * hidden_states.to(input_dtype)
+#         # print (f"{normed.dtype=}")
+#         return normed.to(input_dtype)
+
+#     def extra_repr(self):
+#         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
+
+@use_kernel_forward_from_hub("RMSNorm")
+class PanguEmbeddedRMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
         """
-        Qwen3RMSNorm is equivalent to T5LayerNorm
+        PanguEmbeddedRMSNorm is equivalent to T5LayerNorm
         """
         super().__init__()
         self.weight = nn.Parameter(torch.ones(hidden_size))
-        # print (f"1 {self.weight.dtype=}")
         self.variance_epsilon = eps
 
     def forward(self, hidden_states):
@@ -342,10 +366,7 @@ class Qwen3RMSNorm(nn.Module):
         hidden_states = hidden_states.to(torch.float32)
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        # print (f"2 {self.weight.dtype=}") # not sure why step 2 is bf32 but step 1 is bf16
-        normed = self.weight * hidden_states.to(input_dtype)
-        # print (f"{normed.dtype=}")
-        return normed.to(input_dtype)
+        return self.weight * hidden_states.to(input_dtype)
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
@@ -368,49 +389,13 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
-# # Copied from transformers.models.mixtral.modeling_mixtral.apply_rotary_pos_emb
-# def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim:int=1):
-#     B, L = q.size(0), q.size(-2)
-#     cos = cos[:L].unsqueeze(0).expand(B,L,-1).unsqueeze(unsqueeze_dim)
-#     sin = sin[:L].unsqueeze(0).expand(B,L,-1).unsqueeze(unsqueeze_dim)
-#     q_embed = (q * cos) + (rotate_half(q) * sin)
-#     k_embed = (k * cos) + (rotate_half(k) * sin)
-#     return q_embed, k_embed
-
-def apply_rotary_pos_emb(
-    q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, unsqueeze_dim: int = 1
-):
-    """
-    Applies Rotary Position Embedding to the query and key tensors,
-    handling cases where rotary_percent < 1.0 by only rotating a subset of the dimensions.
-
-    ATTENTION: This version assumes cos/sin tensors are already the full rotation dimension (D_rot),
-    consistent with some Megatron/Fusion implementations, rather than the standard HF (D_rot/2) format.
-
-    Args:
-        q (`torch.Tensor`): The query tensor [Batch, Heads, Seq, Head_Dim].
-        k (`torch.Tensor`): The key tensor [Batch, Heads, Seq, Head_Dim].
-        cos (`torch.Tensor`): The cosine part of the rotary embedding [Batch, Seq, Head_Dim_Rotary]. <--- FULL D_ROT
-        sin (`torch.Tensor`): The sine part of the rotary embedding [Batch, Seq, Head_Dim_Rotary]. <--- FULL D_ROT
-        unsqueeze_dim (`int`, *optional*, defaults to 1): The dimension to unsqueeze cos/sin for broadcasting (usually the Heads dimension).
-
-    Returns:
-        `tuple(torch.Tensor)` comprising of the rotated query and key tensors.
-    """
-    rot_dim = cos.shape[-1]
-
-    q_rope, q_pass = q[..., :rot_dim], q[..., rot_dim:]
-    k_rope, k_pass = k[..., :rot_dim], k[..., rot_dim:]
-
-    cos_broad = cos.unsqueeze(unsqueeze_dim)  # [B, 1, S, Dim]
-    sin_broad = sin.unsqueeze(unsqueeze_dim)  # [B, 1, S, Dim]
-
-    q_embed_rope = (q_rope * cos_broad) + (rotate_half(q_rope) * sin_broad)
-    k_embed_rope = (k_rope * cos_broad) + (rotate_half(k_rope) * sin_broad)
-
-    q_embed = torch.cat((q_embed_rope, q_pass), dim=-1)
-    k_embed = torch.cat((k_embed_rope, k_pass), dim=-1)
-
+# Copied from transformers.models.mixtral.modeling_mixtral.apply_rotary_pos_emb
+def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim:int=1):
+    B, L = q.size(0), q.size(-2)
+    cos = cos[:L].unsqueeze(0).expand(B,L,-1).unsqueeze(unsqueeze_dim)
+    sin = sin[:L].unsqueeze(0).expand(B,L,-1).unsqueeze(unsqueeze_dim)
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
 
 # Copied from transformers.models.llama.modeling_llama.repeat_kv
@@ -454,7 +439,7 @@ class LLMOutput:
     student_post_attention_hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
     key_values: Cache = None
 
-class TMix_qwen3(nn.Module):
+class TMix_openpangu(nn.Module):
     def get_default_state_factory(self): return get_tmix_default_state
 
     def __init__(self, config, layer_id):
@@ -480,28 +465,21 @@ class TMix_qwen3(nn.Module):
                 f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
                 f" and `num_heads`: {self.num_heads})."
             )
-        self.attention_bias = config.attention_bias
+        attention_bias = config.attention_bias
+        self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=attention_bias)
+        self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=attention_bias)
+        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=attention_bias)
+        self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=attention_bias)
+
         self.rms_norm_eps = config.rms_norm_eps
+        self.q_norm = PanguEmbeddedRMSNorm(self.head_dim, eps=self.rms_norm_eps)
+        self.k_norm = PanguEmbeddedRMSNorm(self.head_dim, eps=self.rms_norm_eps)
 
         # self.rotary_emb = Qwen3RotaryEmbedding(
         #     self.head_dim,
         #     max_position_embeddings=config.rope.max_seqlen,
         #     base=config.rope.base,
-        # )exit
-        
-        self.reset_parameters_tmix_qwen3()
-
-    def reset_parameters_tmix_qwen3(self):
-        self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=self.attention_bias)
-        self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=self.attention_bias)
-        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=self.attention_bias)
-        self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=self.attention_bias)
-
-        self.q_norm = Qwen3RMSNorm(self.head_dim, eps=self.rms_norm_eps)
-        self.k_norm = Qwen3RMSNorm(self.head_dim, eps=self.rms_norm_eps)
-
-    def reset_parameters(self):
-        self.reset_parameters_tmix_qwen3()
+        # )
 
     def forward(self, x, reset_mask, v_first, last_model_state:ModelState, shared:Shared, output_attentions:bool=False, past_key_values:Cache=None, **kwargs):
         if last_model_state is not None:
@@ -586,7 +564,7 @@ def ortho_init(x, scale):
             assert False
         return x
 
-class TMix_qwen3rwkv6(TMix_qwen3):
+class TMix_openpangurwkv6(TMix_openpangu):
     """
     Qwen3 RWKV-6cSimple attention module, following Qwen3 attention module. This module inherits from `Qwen3Attention`
     and adds RWKV specific weights for tokenshift, decay, time_first, and the final layernorm.
@@ -846,7 +824,7 @@ class TMix_qwen3rwkv6(TMix_qwen3):
     
         return attn_output, v_first, TimeMixState(last_state.wkv_state, last_state.shift_state), attn_weights #, past_key_value
     
-class TMix_qwen3rwkv7(TMix_qwen3):
+class TMix_openpangurwkv7(TMix_openpangu):
     """
     Qwen3 RWKV-7rc4a attention module, following Qwen3 attention module. This module inherits from `Qwen3Attention`
     and adds RWKV specific weights for tokenshift, decay, time_first, and the final layernorm.
@@ -1163,7 +1141,7 @@ class TMix_qwen3rwkv7(TMix_qwen3):
         #return x, None, past_key_value
 
 
-class TMix_qwen3gdn_base(TMix_qwen3):
+class TMix_openpangugdn_base(TMix_openpangu):
     """
     Qwen3 gdn attention module, following Qwen3 attention module. This module inherits from `Qwen3Attention`
     and adds RWKV specific weights for tokenshift, decay, time_first, and the final layernorm.
@@ -1288,9 +1266,6 @@ class TMix_qwen3gdn_base(TMix_qwen3):
 
         # TODO: check deterministic init?
 
-        # breakpoint()
-        super().reset_parameters()
-
         module = self
 
         C = self.hidden_size = self.config.n_embd
@@ -1331,6 +1306,7 @@ class TMix_qwen3gdn_base(TMix_qwen3):
                 "ShortConvolution is crucial to the performance. "
                 "Do not turn it off, i.e., setting `use_short_conv=False` unless you know what you are doing.",
             )
+
 
         self._reset_parameters()
 
@@ -1543,7 +1519,7 @@ class TMix_qwen3gdn_base(TMix_qwen3):
         raise NotImplementedError()
     
 
-class TMix_qwen3gdn(TMix_qwen3gdn_base):
+class TMix_openpangugdn(TMix_openpangugdn_base):
     def __init__(self, config:Transformer_Config, layer_id):
         super().__init__(config, layer_id)
         self.use_gate = config.use_gate
@@ -1573,7 +1549,6 @@ class TMix_qwen3gdn(TMix_qwen3gdn_base):
             self.o_norm = FusedRMSNormGated(self.head_v_dim, eps=self.norm_eps)
         else:
             self.o_norm = RMSNorm(self.head_v_dim, eps=self.norm_eps, dtype=torch.float32)
-
             
     def forward(self, *args, **kwargs):
         return super().forward(*args, **kwargs)
@@ -1616,7 +1591,7 @@ class TMix_qwen3gdn(TMix_qwen3gdn_base):
         return o, recurrent_state
 
 
-class TMix_qwen3kda(TMix_qwen3gdn_base):
+class TMix_openpangukda(TMix_openpangugdn_base):
     def __init__(self, config:Transformer_Config, layer_id):
 
         super().__init__(config, layer_id)
@@ -1695,7 +1670,7 @@ def get_cmix_default_state(x:Tensor, config:Transformer_Config, requires_grad:bo
         torch.zeros([B, C], dtype=x.dtype, device=x.device, requires_grad=requires_grad)
     )
 
-class CMix_qwen3(nn.Module):
+class CMix_openpangu(nn.Module):
     def get_default_state_factory(self): return get_cmix_default_state
 
     def __init__(self, config, layer_id):
@@ -1716,7 +1691,7 @@ class CMix_qwen3(nn.Module):
             last_state = last_model_state.block_states[self.layer_id].channel_mix_state
         return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x)), last_state
 
-class Qwen3DecoderLayer(nn.Module):
+class PanguEmbeddedDecoderLayer(nn.Module):
     def __init__(self, config:TrainerCLI_Config, layer_id:int):
         super().__init__()
 
@@ -1725,32 +1700,29 @@ class Qwen3DecoderLayer(nn.Module):
 
         args:Transformer_Config = config.model
 
-        self.input_layernorm = Qwen3RMSNorm(args.n_embd, eps=args.rms_norm_eps)
-        self.post_attention_layernorm = Qwen3RMSNorm(args.n_embd, eps=args.rms_norm_eps)
+        self.input_layernorm = PanguEmbeddedRMSNorm(args.n_embd, eps=args.rms_norm_eps)
+        self.post_attention_layernorm = PanguEmbeddedRMSNorm(args.n_embd, eps=args.rms_norm_eps)
 
-        cmix = CMix_qwen3(args, layer_id)
+        cmix = CMix_openpangu(args, layer_id)
 
         if layer_id >= args.n_layer - args.preserve_last_n_layers:
-            self.self_attn = TMix_qwen3(args, layer_id)
+            self.self_attn = TMix_openpangu(args, layer_id)
         elif 'rwkv6' in args.attention_type or 'gla' in args.attention_type:
-            self.self_attn = TMix_qwen3rwkv6(args, layer_id)
+            self.self_attn = TMix_openpangurwkv6(args, layer_id)
         elif 'rwkv7' in args.attention_type:
-            self.self_attn = TMix_qwen3rwkv7(args, layer_id)
+            self.self_attn = TMix_openpangurwkv7(args, layer_id)
         elif 'gdn' in args.attention_type:
-            self.self_attn = TMix_qwen3gdn(args, layer_id)
+            self.self_attn = TMix_openpangugdn(args, layer_id)
         elif 'kda' in args.attention_type:
-            self.self_attn = TMix_qwen3kda(args, layer_id)
+            self.self_attn = TMix_openpangukda(args, layer_id)
         else:
-            self.self_attn = TMix_qwen3(args, layer_id)
-
-        # print ("Init", self.layer_id, self.self_attn.q_norm.weight, torch.mean(self.self_attn.q_norm.weight), torch.var(self.self_attn.q_norm.weight))
-
+            self.self_attn = TMix_openpangu(args, layer_id)
         self.default_time_mix_state_factory = self.self_attn.get_default_state_factory() if hasattr(self.self_attn, 'get_default_state_factory') else lambda x, c, r: TimeMixState()
 
         self.teacher_attn = None
         if config.train is not None:
             if config.train.attention_distillation_stage in (0, 11, 1):
-                self.teacher_attn = TMix_qwen3(args, layer_id)
+                self.teacher_attn = TMix_openpangu(args, layer_id)
         
         self.default_channel_mix_state_factory = cmix.get_default_state_factory() if hasattr(cmix, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
         self.mlp = cmix
@@ -1818,11 +1790,9 @@ class Qwen3DecoderLayer(nn.Module):
         x = x + dx
         dx, last_chanmix_state = self.mlp(self.post_attention_layernorm(x), s)
         x = x + dx
-        
-        # print (self.layer_id, self.self_attn.q_norm.weight, torch.mean(self.self_attn.q_norm.weight), torch.var(self.self_attn.q_norm.weight))
         return x, v_first, s, attentions, post_attention_hidden_states, student_attentions, student_post_attention_hidden_states, past_key_values
 
-def ckpt(block:Qwen3DecoderLayer, *block_args, **block_kwargs):
+def ckpt(block:PanguEmbeddedDecoderLayer, *block_args, **block_kwargs):
     if block.training and block.config.train.grad_cp == 1: # and 'fsdp' not in block.config.train.strategy: # FSDP has its own checkpointing wrapper
         #if "deepspeed" in block.config.train.strategy:
         #    results = deepspeed.checkpointing.checkpoint(block, *block_args)
@@ -1833,7 +1803,7 @@ def ckpt(block:Qwen3DecoderLayer, *block_args, **block_kwargs):
         results = block(*block_args, **block_kwargs)
     return results
 
-class Qwen3Decoder(nn.Module):
+class PanguEmbeddedDecoder(nn.Module):
     def __init__(self, config:TrainerCLI_Config):
         super().__init__()
 
@@ -1845,9 +1815,9 @@ class Qwen3Decoder(nn.Module):
 
         self.embed_tokens = nn.Embedding(args.vocab_size, args.n_embd, args.vocab_padding_idx)
         self.layers = nn.ModuleList(
-            [Qwen3DecoderLayer(config, layer_id) for layer_id in range(args.n_layer)]
+            [PanguEmbeddedDecoderLayer(config, layer_id) for layer_id in range(args.n_layer)]
         )
-        self.norm = Qwen3RMSNorm(args.n_embd, eps=args.rms_norm_eps)
+        self.norm = PanguEmbeddedRMSNorm(args.n_embd, eps=args.rms_norm_eps)
 
     def prepare_shared(self, x):
         config : Transformer_Config = self.config.model
@@ -1956,7 +1926,7 @@ class Qwen3Decoder(nn.Module):
             T = len(token_ids)
             token_ids = torch.tensor(token_ids, device=self.embed_tokens.weight.device, dtype=torch.long, requires_grad=False)[None, :]
 
-        eos_token_id = 151643 # "<|endoftext|>"
+        eos_token_id = 45892 # "[unused10]"
         reset_mask = token_ids == eos_token_id # state needs to be reset at the beginning of the EOS token processing, since we're predicting the next token based on ZERO state!
 
         x = self.embed_tokens(token_ids)
@@ -2016,7 +1986,7 @@ class Qwen3Decoder(nn.Module):
         return LLMOutput(x, last_model_state, hidden_states_outputs, attentions_outputs, post_attention_hidden_states_outputs, student_attentions_outputs, student_post_attention_hidden_states_outputs, past_key_values)
         #return x, last_model_state, hidden_states_outputs, attentions_outputs, post_attention_hidden_states_outputs # FIXME - not updating state at all
 
-class Model_qwen3(nn.Module): # Qwen3CausalLM
+class Model_openpangu(nn.Module): # Qwen3CausalLM
     def __init__(self, config:TrainerCLI_Config):
         super().__init__()
 
@@ -2035,7 +2005,7 @@ class Model_qwen3(nn.Module): # Qwen3CausalLM
         if self.model is not None: 
             return
 
-        self.model = Qwen3Decoder(self.config)
+        self.model = PanguEmbeddedDecoder(self.config)
 
         self.lm_head = nn.Linear(self.config.model.n_embd, self.config.model.vocab_size, bias=False)
 

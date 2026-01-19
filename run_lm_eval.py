@@ -168,7 +168,12 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 print(f'Loading model - {model_path}')
 if config.is_pretrained == "yes":
-    model = AutoModelForCausalLM.from_pretrained(model_path)
+    # model = AutoModelForCausalLM.from_pretrained(model_path)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        torch_dtype=torch.bfloat16,          # or float16
+        attn_implementation="flash_attention_2",
+        device_map="cuda")
 elif config.is_pretrained == "no":
     classname = config.model.classname
     if config.path.lower().endswith('.safetensors'):
@@ -215,7 +220,7 @@ match config.precision:
         exit()
 
 device = 'cuda'
-model = model.to(device=device, dtype=dtype)
+model = model.to(device=device, dtype=torch.bfloat16)
 model.eval()
 
 #pipeline = PIPELINE(model, "rwkv_vocab_v20230424")

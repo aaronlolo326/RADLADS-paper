@@ -10,7 +10,8 @@ export MAIN_PROCESS_PORT=29503
 bsz=16
 
 # tasks=gsm8k
-tasks=winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai,mmlu,mathqa,race
+# tasks=winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai,mmlu,mathqa,race,gsm8k
+tasks=winogrande
 # tasks=mmlu_pro,cmmlu,ceval,gpqa_diamond_zeroshot,aime24,aime25
 # tasks=\
 # gsm8k,\
@@ -18,18 +19,18 @@ tasks=winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai
 # mmlu_pro,cmmlu,ceval,gpqa_diamond_zeroshot,aime24,aime25
 
 
-# # Originally pretrained ##
-# ORIGINAL_MODEL_NAME="Qwen3-8B-Base"
-# ORIGINAL_MODEL_PATH="Qwen/${ORIGINAL_MODEL_NAME}"
-# MODEL_PATH="${BASE}/pths/${ORIGINAL_MODEL_NAME}/pretrained.pth"
-# CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
-# python run_lm_eval.py \
-#     --path ${ORIGINAL_MODEL_PATH} \
-#     -c ${qwen_yaml} \
-#     --is_pretrained yes \
-#     --bsz ${bsz} \
-#     --tasks ${tasks}
-#     # --tasks winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa
+# Originally pretrained ##
+ORIGINAL_MODEL_NAME="Qwen3-8B-Base"
+ORIGINAL_MODEL_PATH="Qwen/${ORIGINAL_MODEL_NAME}"
+MODEL_PATH="${BASE}/pths/${ORIGINAL_MODEL_NAME}/pretrained.pth"
+CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
+python run_lm_eval.py \
+    --path ${ORIGINAL_MODEL_PATH} \
+    -c ${qwen_yaml} \
+    --is_pretrained yes \
+    --bsz ${bsz} \
+    --tasks ${tasks}
+    # --tasks winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa
 
 
 
