@@ -54,9 +54,12 @@ class CLI_Config:
 
 config, errors = parse_cmdline_configs(sys.argv[1:], CLI_Config)
 if errors != '':
+    print("parse_cmdline_configs errors:")
     print(errors)
     exit()
 config.train = None # to avoid clashes with training configs
+
+print(f"{config=}")
 
 os.environ["RWKV_MODEL_TYPE"] = config.model.tmix
 os.environ["RWKV_CTXLEN"] = str(config.model.ctx_len)
@@ -79,8 +82,25 @@ print(f'Loading model - {model_path}')
 classname = config.model.classname
 if config.path.lower().endswith('.safetensors'):
     load_dict = load_file(config.path)
+elif config.path.lower().endswith(".pt") or config.path.lower().endswith(".pth"):
+    load_dict = torch.load(config.path, mmap=True)
+elif os.path.isdir(config.path): # if is a folder pathß
+    load_dict = {}
+    # Iterate the folder and match the filename format: model-*.safetensors
+    for filename in os.listdir(config.path):
+        if filename.startswith("model-") and filename.endswith(".safetensors"):
+            file_path = os.path.join(config.path, filename)
+            
+            print(f"Loading {filename}...")
+        
+            # Load the shard
+            shard = load_file(file_path)
+            
+            # Merge into the main dictionary
+            load_dict.update(shard)
 else:
-    load_dict = torch.load(model_path, mmap=True)
+    raise ValueError(f"Unsupported model path: {config.path}")
+    
 # pprint (list(load_dict.keys()))
 # pprint (load_dict)
 # pprint (f"{config.model.n_embd=}")
@@ -111,6 +131,7 @@ tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_path, trust_remote_co
 if hasattr(model, 'configure_model'):
     model.configure_model()
 model.load_state_dict(load_dict, assign=True, strict=False)
+print("Weight loaded.")
 
 match config.precision:
     case 32:

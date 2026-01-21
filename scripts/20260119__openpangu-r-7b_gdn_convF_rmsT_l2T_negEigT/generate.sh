@@ -49,29 +49,37 @@ echo $RUN_NAME
 
 CUDA_VISIBLE_DEVICES="0"
 
-start=0
-end=20
-stride=1
-checkpoints=('init')
-for i in $(seq $start $stride $end); do
-    checkpoints+=("$i")
-done
-checkpoints+=('final')
+# start=0
+# end=20
+# stride=1
+# checkpoints=('init')
+# for i in $(seq $start $stride $end); do
+#     checkpoints+=("$i")
+# done
+# checkpoints+=('final')
+
+# # for idx in "${checkpoints[@]}"; do
+# #     CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
+# #     python generate.py \
+# #         -c ${qwen_yaml} \
+# #         -c ${la_yaml} \
+# #         --path "${STEP0_PTH_PATH}/ckpt-${idx}.pth" \
+# #         --tokenizer_path ${tokenizer}
+# # done
 
 # for idx in "${checkpoints[@]}"; do
 #     CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
 #     python generate.py \
 #         -c ${qwen_yaml} \
 #         -c ${la_yaml} \
-#         --path "${STEP0_PTH_PATH}/ckpt-${idx}.pth" \
+#         --path "${STEP1_PTH_PATH}/ckpt-${idx}.pth" \
 #         --tokenizer_path ${tokenizer}
 # done
-
-for idx in "${checkpoints[@]}"; do
-    CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
+# path=/work/aman/hub/models--Qwen--Qwen3-8B-Base
+path=/work/jijun/model/openPangu-R-7B-2512
+CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
     python generate.py \
-        -c ${qwen_yaml} \
-        -c ${la_yaml} \
-        --path "${STEP1_PTH_PATH}/ckpt-${idx}.pth" \
+        -c ${openpangu_yaml} \
+        -c ${openpangu_all_orig_attn_yaml} \
+        --path "${path}" \
         --tokenizer_path ${tokenizer}
-done

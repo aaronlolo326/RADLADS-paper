@@ -17,6 +17,8 @@ STEP1_PTH_PATH="${out_pths_dir}/${STEP1_DIR}"
 STEP2_PTH_PATH="${out_pths_dir}/${STEP2_DIR}"
 
 qwen_yaml=configs/qwen3-8b.yaml
+openpangu_yaml=configs/openpangu-R-7b.yaml
 la_yaml="configs/${RUN_NAME}/gdn.yaml"
 all_orig_attn="configs/${RUN_NAME}/qwen3-8b_all_orig_attn.yaml"
-tokenizer="/work/aman/openPangu-R-7B-2512"
+openpangu_all_orig_attn_yaml="configs/${RUN_NAME}/openpangu-r-7b-all-origin-attn.yaml"
+tokenizer="/work/jijun/model/openPangu-R-7B-2512"

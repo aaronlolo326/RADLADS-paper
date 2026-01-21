@@ -1262,7 +1262,7 @@ class TMix_openpangugdn_base(TMix_openpangu):
         ###
 
     def reset_parameters(self):
-        print("Called reset_parameters on TMix_qwen3gdn_base layer ", self.layer_id)
+        print("Called reset_parameters on TMix_openpangugdn_base layer ", self.layer_id)
 
         # TODO: check deterministic init?
 
@@ -1526,7 +1526,7 @@ class TMix_openpangugdn(TMix_openpangugdn_base):
         self.reset_parameters()
 
     def _reset_parameters(self):
-        print("Called _reset_parameters on TMix_qwen3gdn layer ", self.layer_id)
+        print("Called _reset_parameters on TMix_openpangu3gdn layer ", self.layer_id)
         self.a_proj = nn.Linear(self.hidden_size, self.num_v_heads, bias=False)
         self.b_proj = nn.Linear(self.hidden_size, self.num_v_heads, bias=False)
 

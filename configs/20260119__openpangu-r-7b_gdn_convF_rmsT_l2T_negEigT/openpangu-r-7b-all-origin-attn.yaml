@@ -1,0 +1,4 @@
+model:
+  tmix: openpangu
+  attention_type: gdn # rwkv7 # rwkv7_wind_backstepping_longhead # rwkv7_wind_replaystepping_longhead # 
+  preserve_last_n_layers: 28
