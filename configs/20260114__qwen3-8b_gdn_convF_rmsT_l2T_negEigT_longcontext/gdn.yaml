@@ -17,3 +17,5 @@ model:
   liger_patch_swiglu: true
   liger_patch_rope: false
   liger_use_loss_kernels: false
+
+  preserve_layers_lst: [0,4,8,16,24]  # layers to preserve FA attention, deprecate preserve_last_n_layers

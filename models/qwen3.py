@@ -1701,8 +1701,10 @@ class Qwen3DecoderLayer(nn.Module):
 
         cmix = CMix_qwen3(args, layer_id)
 
-        if layer_id >= args.n_layer - args.preserve_last_n_layers:
+        if args.preserve_layers_lst is not None and layer_id in args.preserve_layers_lst:
             self.self_attn = TMix_qwen3(args, layer_id)
+        # if layer_id >= args.n_layer - args.preserve_last_n_layers:
+        #     self.self_attn = TMix_qwen3(args, layer_id)
         elif 'rwkv6' in args.attention_type or 'gla' in args.attention_type:
             self.self_attn = TMix_qwen3rwkv6(args, layer_id)
         elif 'rwkv7' in args.attention_type:
@@ -1712,7 +1714,10 @@ class Qwen3DecoderLayer(nn.Module):
         elif 'kda' in args.attention_type:
             self.self_attn = TMix_qwen3kda(args, layer_id)
         else:
+            print(f"Warning: attention_type {args.attention_type} or preserve_layers_lst {args.preserve_layers_lst} not recognized, defaulting to standard Qwen3 attention")
             self.self_attn = TMix_qwen3(args, layer_id)
+
+        
         self.default_time_mix_state_factory = self.self_attn.get_default_state_factory() if hasattr(self.self_attn, 'get_default_state_factory') else lambda x, c, r: TimeMixState()
 
         self.teacher_attn = None
@@ -2007,7 +2012,7 @@ class Model_qwen3(nn.Module): # Qwen3CausalLM
             return
 
         self.model = Qwen3Decoder(self.config)
-        # import pdb;pdb.set_trace()
+        import pdb;pdb.set_trace()
         if self.config.model.liger_kernel_enabled:
             self._apply_manual_liger_patch(self.model) 
         self.lm_head = nn.Linear(self.config.model.n_embd, self.config.model.vocab_size, bias=False)

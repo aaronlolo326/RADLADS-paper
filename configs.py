@@ -28,6 +28,9 @@ class Model_Config:
     rms_norm_eps:float = 1e-06
     vocab_padding_idx:int|None = None
 
+    #layerlist for FA preservation, priority over preserve_last_n_layers
+    preserve_layers_lst:list = field(default_factory=list)
+
 
 @dataclass(kw_only=True)
 class RoPE_Config:
