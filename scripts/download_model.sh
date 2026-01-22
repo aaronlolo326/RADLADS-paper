@@ -26,8 +26,11 @@ download_and_convert_model() {
     python3 convert_hf_to_pth.py ${YOUR_CACHED_HF_QWEN_MODEL_LOCATION} ${pths_dir}/${MODEL_NAME}/pretrained.pth
 }
 
-MODEL_PATH="Qwen/Qwen3-8B-Base"
-download_and_convert_model ${MODEL_PATH}
+# MODEL_PATH="Qwen/Qwen3-8B-Base"
+# download_and_convert_model ${MODEL_PATH}
 
-MODEL_PATH="Qwen/Qwen3-1.7B-Base"
+# MODEL_PATH="Qwen/Qwen3-1.7B-Base"
+# download_and_convert_model ${MODEL_PATH}
+
+MODEL_PATH="Qwen/Qwen3-8B"
 download_and_convert_model ${MODEL_PATH}
