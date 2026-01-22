@@ -4,7 +4,7 @@ import torch.utils.checkpoint
 import torch.nn as nn
 from torch.nn import functional as F
 from torch import Tensor
-from typing import Tuple, Optional
+from typing import Callable, Tuple, Optional
 
 from src.state import ModelState, BlockState, ChannelMixState, TimeMixState, Shared
 
@@ -25,6 +25,7 @@ from src.logger import print0 as print
 from fla.models.utils import Cache
 from transformers.processing_utils import Unpack
 from transformers.integrations import use_kernel_forward_from_hub
+from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
 ATTENTION_TYPE = os.environ["RWKV_ATTENTION_TYPE"]
 print (f"From line 26 of openpangu.py: {ATTENTION_TYPE=}")
@@ -326,30 +327,61 @@ elif ATTENTION_TYPE in ['gdn', 'kda']:
 else:
     assert False, 'bad attention type specified'
 
+def aggregate_hidden_through_time(
+    input_hidden, merge_conv, sliding_window=2, decay_coeff=0.5, restore_sliding_window=False, history_cache=None
+):
+    """
+    input_hidden.shape = (B, S, H)
+    return.shape = (B, S, H)
+    """
+    B, S, H = input_hidden.shape
 
-# # Copied from transformers.models.llama.modeling_llama.LlamaRMSNorm with Llama->Qwen3
-# class Qwen3RMSNorm(nn.Module):
-#     def __init__(self, hidden_size, eps=1e-6):
-#         """
-#         Qwen3RMSNorm is equivalent to T5LayerNorm
-#         """
-#         super().__init__()
-#         self.weight = nn.Parameter(torch.ones(hidden_size))
-#         # print (f"1 {self.weight.dtype=}")
-#         self.variance_epsilon = eps
+    # concat zeors to the lefe of the first token
+    if history_cache is None:
+        history_cache = torch.zeros((B, H, sliding_window - 1), device=input_hidden.device, dtype=input_hidden.dtype)
+    else:
+        history_cache = history_cache.permute(0, 2, 1)
 
-#     def forward(self, hidden_states):
-#         input_dtype = hidden_states.dtype
-#         hidden_states = hidden_states.to(torch.float32)
-#         variance = hidden_states.pow(2).mean(-1, keepdim=True)
-#         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-#         # print (f"2 {self.weight.dtype=}") # not sure why step 2 is bf32 but step 1 is bf16
-#         normed = self.weight * hidden_states.to(input_dtype)
-#         # print (f"{normed.dtype=}")
-#         return normed.to(input_dtype)
+    conv_input = torch.cat(
+        [history_cache, input_hidden.permute(0, 2, 1)],  # input_hidden (B, S, H) -> (B, H, S)
+        dim=-1,
+    )
 
-#     def extra_repr(self):
-#         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
+    conv_output = merge_conv(conv_input)
+    # (B, H, S) -> (B, S, H)
+    return conv_output.permute(0, 2, 1)
+
+
+class WindowBuffer:
+    def __init__(self, win_size, decay_coeff, use_cache, aggregate_fn):
+        self.win_size = win_size
+        self.decay_coeff = decay_coeff
+        self.use_cache = use_cache
+        self.aggregate_fn = aggregate_fn
+        self.buffer = None
+
+    def get_aggregated_hidden(self, hidden_states):
+        if not self.use_cache:
+            self.buffer = None
+            return aggregate_hidden_through_time(hidden_states, self.aggregate_fn, sliding_window=self.win_size)
+
+        B, S, H = hidden_states.shape
+        if S > 1:
+            # prefill, generate first token
+            win_input = aggregate_hidden_through_time(hidden_states, self.aggregate_fn, sliding_window=self.win_size)
+            self.buffer = hidden_states[:, -(self.win_size - 1) :]
+        else:
+            # decode stage
+            win_input = aggregate_hidden_through_time(
+                hidden_states, self.aggregate_fn, sliding_window=self.win_size, history_cache=self.buffer
+            )
+            if self.win_size > 2:
+                self.buffer = torch.cat([self.buffer[:, -(self.win_size - 2) :], hidden_states], dim=1)
+            else:
+                self.buffer = hidden_states
+
+        return win_input
+
 
 @use_kernel_forward_from_hub("RMSNorm")
 class PanguEmbeddedRMSNorm(nn.Module):
@@ -371,15 +403,17 @@ class PanguEmbeddedRMSNorm(nn.Module):
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
 
-def generate_rotary_embedding(max_seqlen:int, dim:int, theta:float = 10000.0, scale:float = 1):
-    #inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float).to(device) / dim))
-
-    angular_velocity = theta ** -(torch.arange(0, dim, 2, dtype=torch.float) / dim) / scale # frequencies from 1.0 ... 1/theta
-    angles = torch.outer(torch.arange(max_seqlen), angular_velocity)
-    # Different from paper, but it uses a different permutation in order to obtain the same calculation
+def generate_rotary_embedding(max_seqlen: int, dim: int, theta: float = 10000.0, scale: float = 1, rotary_percent: float = 1.0):
+    # partial from open-pangu
+    if rotary_percent < 1.0:
+        dim = int(dim * rotary_percent)
+        if dim % 2 != 0:
+            dim += 1
+    angular_velocity = theta ** -(torch.arange(0, dim, 2, dtype=torch.float) / dim) / scale
+    angles = torch.outer(torch.arange(max_seqlen, dtype=torch.float), angular_velocity)
     emb = torch.cat((angles, angles), dim=-1)
+    # Returns shape: [2, max_seqlen, modified_dim]
     return torch.stack([emb.cos(), emb.sin()], dim=0)
-    #return torch.polar(torch.ones_like(angles), angles)
 
 # Copied from transformers.models.llama.modeling_llama.rotate_half
 def rotate_half(x):
@@ -389,14 +423,34 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
-# Copied from transformers.models.mixtral.modeling_mixtral.apply_rotary_pos_emb
-def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim:int=1):
+# * check for partial rope
+def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim: int = 1):
+    """
+    Applies Rotary Position Embedding (RoPE) handling partial rotation.
+    
+    Args:
+        q: Query states [Batch, Seq, Heads, Dim] or [Batch, Heads, Seq, Dim]
+        k: Key states
+        cos: Cosine embedding [MaxSeq, RotaryDim]
+        sin: Sine embedding [MaxSeq, RotaryDim]
+        unsqueeze_dim: Dimension to unsqueeze for broadcasting to heads
+    """
+    rotary_dim = cos.shape[-1]
+
+    q_rot, q_pass = q[..., :rotary_dim], q[..., rotary_dim:]
+    k_rot, k_pass = k[..., :rotary_dim], k[..., rotary_dim:]
+
     B, L = q.size(0), q.size(-2)
-    cos = cos[:L].unsqueeze(0).expand(B,L,-1).unsqueeze(unsqueeze_dim)
-    sin = sin[:L].unsqueeze(0).expand(B,L,-1).unsqueeze(unsqueeze_dim)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
-    return q_embed, k_embed
+    cos = cos[:L].unsqueeze(0).expand(B, L, -1).unsqueeze(unsqueeze_dim)
+    sin = sin[:L].unsqueeze(0).expand(B, L, -1).unsqueeze(unsqueeze_dim)
+
+    q_embed = (q_rot * cos) + (rotate_half(q_rot) * sin)
+    k_embed = (k_rot * cos) + (rotate_half(k_rot) * sin)
+
+    q_out = torch.cat((q_embed, q_pass), dim=-1)
+    k_out = torch.cat((k_embed, k_pass), dim=-1)
+
+    return q_out, k_out
 
 # Copied from transformers.models.llama.modeling_llama.repeat_kv
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -449,15 +503,16 @@ class TMix_openpangu(nn.Module):
         self.ctx_len = config.ctx_len
 
         self.head_dim = config.head_size
-
+        self.v_channels = config.v_channels
         self.hidden_size = config.n_embd
         self.num_heads = config.dim_att // self.head_dim
-        # print (f"{self.num_heads=}")
         self.num_key_value_heads = config.num_key_value_heads if config.num_key_value_heads > 0 else self.num_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
+        self.sliding_window = getattr(config, "sliding_window", None)
         # self.max_position_embeddings = config.max_position_embeddings
         # self.rope_theta = config.rope_theta
-        # self.is_causal = True
+        # ! always have the right-down causal mask
+        self.is_causal = True
         # self.attention_dropout = config.attention_dropout
 
         if (self.head_dim * self.num_heads) != self.hidden_size:
@@ -468,18 +523,48 @@ class TMix_openpangu(nn.Module):
         attention_bias = config.attention_bias
         self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=attention_bias)
         self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=attention_bias)
-        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=attention_bias)
-        self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=attention_bias)
+        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.v_channels, bias=attention_bias)
+        self.o_proj = nn.Linear(self.num_heads * self.v_channels, self.hidden_size, bias=attention_bias)
 
         self.rms_norm_eps = config.rms_norm_eps
-        self.q_norm = PanguEmbeddedRMSNorm(self.head_dim, eps=self.rms_norm_eps)
-        self.k_norm = PanguEmbeddedRMSNorm(self.head_dim, eps=self.rms_norm_eps)
 
-        # self.rotary_emb = Qwen3RotaryEmbedding(
-        #     self.head_dim,
-        #     max_position_embeddings=config.rope.max_seqlen,
-        #     base=config.rope.base,
-        # )
+        self.param_sink_number = getattr(config, "param_sink_number", 0)
+        self.param_sink_with_value = getattr(config, "param_sink_with_value", False)
+
+        self.attn_groupnorm = getattr(config, "attn_groupnorm", False)
+        self.attn_elementwise_gate = getattr(config, "attn_elementwise_gate", False)
+
+        if self.param_sink_number > 0:
+            # Query Sink (Constant Zero buffer in Pangu, not a learnable parameter)
+            self.register_buffer(
+                "param_sink_query", 
+                torch.zeros((self.param_sink_number, self.num_heads, self.head_dim)), 
+                persistent=False
+            )
+
+            # Key Sink (Learnable Parameter)
+            self.param_sink_key = nn.Parameter(
+                torch.empty((self.param_sink_number, self.num_key_value_heads, self.head_dim))
+            )
+
+            # Value Sink (Learnable if config says so, else constant zeros)
+            if self.param_sink_with_value:
+                self.param_sink_value = nn.Parameter(
+                    torch.empty((self.param_sink_number, self.num_key_value_heads, self.v_channels))
+                )
+            else:
+                self.register_buffer(
+                    "param_sink_value",
+                    torch.zeros((self.param_sink_number, self.num_key_value_heads, self.v_channels)),
+                    persistent=False
+                )
+
+        if self.attn_groupnorm:
+            self.groupnorm = PanguEmbeddedRMSNorm(self.v_channels, eps=self.rms_norm_eps)
+
+        if self.attn_elementwise_gate:
+            self.attention_gate = nn.Linear(self.hidden_size, self.num_heads * self.v_channels, bias=False)
+
 
     def forward(self, x, reset_mask, v_first, last_model_state:ModelState, shared:Shared, output_attentions:bool=False, past_key_values:Cache=None, **kwargs):
         if last_model_state is not None:
@@ -496,8 +581,8 @@ class TMix_openpangu(nn.Module):
         q = self.q_proj(x)
         k = self.k_proj(x)
         v = self.v_proj(x)
-
-
+        gate_score = self.attention_gate(x) if self.attn_elementwise_gate else None
+        
         # handle recurrent inference via maintaining a kv cache
         # if not self.training:
         #     new_kv_cache = torch.stack([k, v], dim=0)
@@ -505,10 +590,8 @@ class TMix_openpangu(nn.Module):
         #     k, v = wkv_state.unbind(0)
         #     k, v = k.contiguous(), v.contiguous()
 
-        is_causal = q.size(1)==k.size(1)
-
-        q = self.q_norm(q.view(B,L,QH,-1)).transpose(1,2)
-        k = self.k_norm(k.view(B,L,KVH,-1)).transpose(1,2)
+        q = q.view(B,L,QH,-1).transpose(1,2) # b h l d
+        k = k.view(B,L,KVH,-1).transpose(1,2)
         v = v.view(B,L,KVH,-1).transpose(1,2)
 
         #q, k = apply_rotary_embedding(q, k, shared.angles)
@@ -519,6 +602,22 @@ class TMix_openpangu(nn.Module):
         q, k = apply_rotary_pos_emb(q, k, cos, sin)
         q = q.to(v.dtype)
         k = k.to(v.dtype)
+
+        # TODO: Support transformer kv-cache
+        # if past_key_values is not None:
+        #     k, v = past_key_values.update(k, v, self.layer_id, cache_kwargs=kwargs)
+
+        is_prefill = L > 1
+        if self.param_sink_number > 0:
+            sink_k = self.param_sink_key.permute(1, 0, 2).unsqueeze(0).expand(B, -1, -1, -1).to(k.dtype) # b h sink d
+            k = torch.cat([sink_k, k], dim=2)
+
+            sink_v = self.param_sink_value.permute(1, 0, 2).unsqueeze(0).expand(B, -1, -1, -1).to(v.dtype)
+            v = torch.cat([sink_v, v], dim=2)
+
+            if is_prefill:
+                sink_q = self.param_sink_query.permute(1, 0, 2).unsqueeze(0).expand(B, -1, -1, -1).to(q.dtype)
+                q = torch.cat([sink_q, q], dim=2)
 
         # repeat k/v heads if n_kv_heads < n_heads
         k = repeat_kv(k, self.num_key_value_groups)
@@ -543,9 +642,35 @@ class TMix_openpangu(nn.Module):
         else:
             attn_weights = torch.empty(0, device=x.device)
 
-        y = nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=is_causal)
-        y = y.transpose(1,2).reshape(B,L,D)
+        # y = nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=is_causal) # b h l d
+        
+        attention_interface: Callable = ALL_ATTENTION_FUNCTIONS.get(
+            getattr(self.config, "_attn_implementation", "sdpa"), 
+            ALL_ATTENTION_FUNCTIONS["sdpa"]
+        )
+        y, attn_weights = attention_interface(
+            self,
+            q,
+            k,
+            v,
+            attention_mask=None, 
+            dropout=0.0,
+            scaling=self.head_dim ** -0.5,
+            sliding_window=self.sliding_window,
+        )
+
+        if self.param_sink_number > 0 and is_prefill:
+            y = y[:, self.param_sink_number:, :, :] # b l n d
+
+        if self.attn_groupnorm:
+            y = self.groupnorm(y)
+
+        y = y.reshape(B, L, self.num_heads * self.v_channels)
+        if self.attn_elementwise_gate:
+            y = y * F.sigmoid(gate_score)
+
         y = self.o_proj(y)
+
         return y, v_first, tmix_state, attn_weights, past_key_values
 
 def ortho_init(x, scale):
@@ -1727,6 +1852,24 @@ class PanguEmbeddedDecoderLayer(nn.Module):
         self.default_channel_mix_state_factory = cmix.get_default_state_factory() if hasattr(cmix, 'get_default_state_factory') else lambda x, c, r: ChannelMixState()
         self.mlp = cmix
 
+        if layer_id == 0 or layer_id == args.n_layer - 1:
+            self.start_end = True
+        else:
+            self.start_end = False
+        self.router_sliding_window = getattr(args, "router_sliding_window", None)
+        self.router_win_decay = getattr(args, "router_win_decay", 1.0)
+        if self.start_end and self.router_sliding_window:
+            self.merge_conv = torch.nn.Conv1d(
+                args.n_embd,
+                args.n_embd,
+                self.router_sliding_window,
+                groups=args.n_embd,
+                bias=False,
+            )
+            self.window_buffer = WindowBuffer(
+                self.router_sliding_window, self.router_win_decay, True, self.merge_conv.forward
+            )
+
     def forward(
         self, x:Tensor,
         reset_mask:Tensor,
@@ -1788,7 +1931,14 @@ class PanguEmbeddedDecoderLayer(nn.Module):
             student_post_attention_hidden_states = torch.empty(0, device=x.device)
             
         x = x + dx
-        dx, last_chanmix_state = self.mlp(self.post_attention_layernorm(x), s)
+
+        if self.start_end and self.router_sliding_window:
+            win_input = self.window_buffer.get_aggregated_hidden(x)
+        else:
+            win_input = x
+
+        dx, last_chanmix_state = self.mlp(self.post_attention_layernorm(win_input), s)
+
         x = x + dx
         return x, v_first, s, attentions, post_attention_hidden_states, student_attentions, student_post_attention_hidden_states, past_key_values
 
@@ -1817,7 +1967,12 @@ class PanguEmbeddedDecoder(nn.Module):
         self.layers = nn.ModuleList(
             [PanguEmbeddedDecoderLayer(config, layer_id) for layer_id in range(args.n_layer)]
         )
-        self.norm = PanguEmbeddedRMSNorm(args.n_embd, eps=args.rms_norm_eps)
+        self.norms = nn.ModuleList(
+            [
+                PanguEmbeddedRMSNorm(args.n_embd, eps=args.rms_norm_eps),
+                PanguEmbeddedRMSNorm(args.n_embd, eps=args.rms_norm_eps),
+            ]
+        )
 
     def prepare_shared(self, x):
         config : Transformer_Config = self.config.model
@@ -1825,7 +1980,7 @@ class PanguEmbeddedDecoder(nn.Module):
         shared = self.shared
         if config.rope is not None and T > shared.angles.size(0):
             max_ctx_len = max(config.ctx_len, (T + 15) // 16 * 16)
-            shared.angles = generate_rotary_embedding(max_ctx_len, config.head_size, config.rope.base * config.rope.rebase, config.rope.rescale).to(self.norm.weight)
+            shared.angles = generate_rotary_embedding(max_ctx_len, config.head_size, config.rope.base * config.rope.rebase, config.rope.rescale, config.rope.percent).to(self.norms[0].weight)
         # print (shared.angles)
 
         assert (shared.angles.size(0) == 0 or T <= shared.angles.size(0)) or (shared.bias_mask.size(0) == 0 or T <= shared.bias_mask.size(0))
@@ -1976,7 +2131,7 @@ class PanguEmbeddedDecoder(nn.Module):
                 post_attention_hidden_states_outputs += (post_attention_hidden_states,)
                 student_post_attention_hidden_states_outputs += (student_post_attention_hidden_states,)
 
-        x = self.norm(x)
+        x = self.norms[0](x)
 
         # FIXME - we added one after the norm so we can include that (calling it from externally messes up FSDP)
         if output_hidden_states:

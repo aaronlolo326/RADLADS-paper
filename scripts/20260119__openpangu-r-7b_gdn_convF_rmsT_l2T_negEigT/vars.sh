@@ -21,4 +21,4 @@ openpangu_yaml=configs/openpangu-R-7b.yaml
 la_yaml="configs/${RUN_NAME}/gdn.yaml"
 all_orig_attn="configs/${RUN_NAME}/qwen3-8b_all_orig_attn.yaml"
 openpangu_all_orig_attn_yaml="configs/${RUN_NAME}/openpangu-r-7b-all-origin-attn.yaml"
-tokenizer="/work/jijun/model/openPangu-R-7B-2512"
+tokenizer="/work/jijun/models/openPangu-R-7B-2512"

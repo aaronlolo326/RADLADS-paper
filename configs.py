@@ -33,6 +33,7 @@ class RoPE_Config:
     base:float = 10_000
     rescale:float = 1.0
     rebase:float = 1.0
+    percent:float = 1.0
 
 @dataclass(kw_only=True)
 class BinaryRoPE_Config:
@@ -89,6 +90,16 @@ class Transformer_Config(Model_Config):
 
     conv_zero_init: bool = False
     use_qk_l2norm_in_kernel: bool = True
+
+    v_channels: int = 128
+    param_sink_number: int = 0
+    param_sink_with_value: bool = False
+    sliding_window: int | None = None
+    attn_groupnorm: bool = True
+    attn_elementwise_gate: bool = False
+    router_sliding_window: int | None = None
+    router_win_decay: float = 0
+    _attn_implementation: str = "sdpa"
 
 
 
@@ -291,6 +302,8 @@ yaml_loader.add_implicit_resolver(
 def load_configs(paths:list[str], out:Config|None = None):
     if out is None:
         out = Config()
+
+    print(f"[load_configs] {paths=}")
 
     for path in paths:
         if path.endswith('.yaml'):

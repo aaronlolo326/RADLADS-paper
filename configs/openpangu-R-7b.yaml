@@ -8,11 +8,22 @@ model:
     vocab_padding_idx: 151646 
     num_key_value_heads: 8
     head_size: 128
+    v_channels: 128
     n_embd: 4096
+    dim_att: 4096
     dim_ffn: 16384
     rms_norm_eps: 1e-5
     n_layer: 27
     rope:
         __type__: configs.RoPE_Config
         base: 16000000.0
-    attention_bias: False
+        percent: 0.25
+    attention_bias: True
+    param_sink_number: 128
+    param_sink_with_value: True
+    sliding_window: 128
+    attn_groupnorm: True
+    attn_elementwise_gate: True
+    router_sliding_window: 3
+    router_win_decay: 0.5
+    _attn_implementation: flash_attention_2

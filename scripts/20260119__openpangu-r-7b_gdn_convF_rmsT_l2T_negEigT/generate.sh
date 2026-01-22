@@ -76,10 +76,12 @@ CUDA_VISIBLE_DEVICES="0"
 #         --tokenizer_path ${tokenizer}
 # done
 # path=/work/aman/hub/models--Qwen--Qwen3-8B-Base
-path=/work/jijun/model/openPangu-R-7B-2512
+path=/work/jijun/models/openPangu-R-7B-2512
 CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
     python generate.py \
         -c ${openpangu_yaml} \
         -c ${openpangu_all_orig_attn_yaml} \
         --path "${path}" \
-        --tokenizer_path ${tokenizer}
+        --tokenizer_path ${tokenizer} \
+        --is_instruct 1 \
+        --max_len 50

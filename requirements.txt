@@ -2,3 +2,5 @@ pytorch
 transformers
 flash-linear-attention
 sentencepiece
+accelerate
+lightning
