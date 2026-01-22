@@ -39,12 +39,12 @@ tasks=winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai
 
 checkpoints=()
 checkpoints+=('init')
-start=0
-end=20
-stride=1
-for i in $(seq $start $stride $end); do
-    checkpoints+=("$i")
-done
+# start=0
+# end=20
+# stride=1
+# for i in $(seq $start $stride $end); do
+#     checkpoints+=("$i")
+# done
 checkpoints+=('final')
 # tasks=mmlu,lambada_openai,hellaswag
 
