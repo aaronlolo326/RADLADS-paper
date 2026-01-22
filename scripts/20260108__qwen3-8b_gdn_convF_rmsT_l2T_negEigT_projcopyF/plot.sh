@@ -1,9 +1,11 @@
 #!/bin/bash
 source "$(dirname "$0")/vars.sh"
 source $(conda info --base)/etc/profile.d/conda.sh
+# which conda
+# conda env list
 conda activate base+
 
-DATE_STR=""
+DATE_STR="20260112"
 
 # python plot.py \
 #     --date_str ${DATE_STR} \

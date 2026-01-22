@@ -52,10 +52,11 @@ CUDA_VISIBLE_DEVICES="0"
 start=0
 end=20
 stride=1
-checkpoints=('init')
-for i in $(seq $start $stride $end); do
-    checkpoints+=("$i")
-done
+checkpoints=()
+# checkpoints+=('init')
+# for i in $(seq $start $stride $end); do
+#     checkpoints+=("$i")
+# done
 checkpoints+=('final')
 
 # for idx in "${checkpoints[@]}"; do
@@ -69,9 +70,9 @@ checkpoints+=('final')
 
 for idx in "${checkpoints[@]}"; do
     CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
-    python generate.py \
+    python generate_.py \
         -c ${qwen_yaml} \
         -c ${la_yaml} \
-        --path "${STEP1_PTH_PATH}/ckpt-${idx}.pth" \
+        --path "${STEP2_PTH_PATH}/ckpt-${idx}.pth" \
         --tokenizer_path ${tokenizer}
 done

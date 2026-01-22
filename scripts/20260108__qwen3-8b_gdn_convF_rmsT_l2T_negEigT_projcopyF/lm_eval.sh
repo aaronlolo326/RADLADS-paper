@@ -39,60 +39,14 @@ tasks=winogrande,arc_easy,arc_challenge,hellaswag,piqa,openbookqa,lambada_openai
 
 checkpoints=()
 checkpoints+=('init')
-start=0
-end=20
-stride=1
-for i in $(seq $start $stride $end); do
-    checkpoints+=("$i")
-done
+# start=0
+# end=20
+# stride=1
+# for i in $(seq $start $stride $end); do
+#     checkpoints+=("$i")
+# done
 checkpoints+=('final')
 # tasks=mmlu,lambada_openai,hellaswag
-
-
-
-
-
-for i in "${checkpoints[@]}"; do
-    CKPT_PATH="${STEP0_PTH_PATH}/ckpt-${i}.pth"
-    if [ -f "$CKPT_PATH" ]; then
-        echo "Evaluating checkpoint: $CKPT_PATH"
-        CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
-        python run_lm_eval.py \
-            -c ${qwen_yaml} \
-            -c ${la_yaml} \
-            --path "${CKPT_PATH}" \
-            --is_pretrained no \
-            --bsz ${bsz} \
-            --tokenizer_name ${tokenizer} \
-            --tasks ${tasks}
-            # gsm8k
-    else
-        echo "Checkpoint does not exist: $CKPT_PATH, skipping."
-    fi
-done
-
-
-
-
-
-for i in "${checkpoints[@]}"; do
-    CKPT_PATH="${STEP1_PTH_PATH}/ckpt-${i}.pth"
-    if [ -f "$CKPT_PATH" ]; then
-        echo "Evaluating checkpoint: $CKPT_PATH"
-        CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
-        python run_lm_eval.py \
-            -c ${qwen_yaml} \
-            -c ${la_yaml} \
-            --path "${CKPT_PATH}" \
-            --is_pretrained no \
-            --bsz ${bsz} \
-            --tokenizer_name ${tokenizer} \
-            --tasks ${tasks}
-            # gsm8k
-    else
-        echo "Checkpoint does not exist: $CKPT_PATH, skipping."
-    fi
-done
 
 
 
@@ -116,6 +70,52 @@ for i in "${checkpoints[@]}"; do
         echo "Checkpoint does not exist: $CKPT_PATH, skipping."
     fi
 done
+
+
+
+
+
+# for i in "${checkpoints[@]}"; do
+#     CKPT_PATH="${STEP0_PTH_PATH}/ckpt-${i}.pth"
+#     if [ -f "$CKPT_PATH" ]; then
+#         echo "Evaluating checkpoint: $CKPT_PATH"
+#         CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
+#         python run_lm_eval.py \
+#             -c ${qwen_yaml} \
+#             -c ${la_yaml} \
+#             --path "${CKPT_PATH}" \
+#             --is_pretrained no \
+#             --bsz ${bsz} \
+#             --tokenizer_name ${tokenizer} \
+#             --tasks ${tasks}
+#             # gsm8k
+#     else
+#         echo "Checkpoint does not exist: $CKPT_PATH, skipping."
+#     fi
+# done
+
+
+
+
+
+# for i in "${checkpoints[@]}"; do
+#     CKPT_PATH="${STEP1_PTH_PATH}/ckpt-${i}.pth"
+#     if [ -f "$CKPT_PATH" ]; then
+#         echo "Evaluating checkpoint: $CKPT_PATH"
+#         CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} \
+#         python run_lm_eval.py \
+#             -c ${qwen_yaml} \
+#             -c ${la_yaml} \
+#             --path "${CKPT_PATH}" \
+#             --is_pretrained no \
+#             --bsz ${bsz} \
+#             --tokenizer_name ${tokenizer} \
+#             --tasks ${tasks}
+#             # gsm8k
+#     else
+#         echo "Checkpoint does not exist: $CKPT_PATH, skipping."
+#     fi
+# done
 
 python ~/exp.py --gpus 0
 
