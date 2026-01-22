@@ -1,6 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass,field
 import datetime
 import typing
+from typing import List, Union, Sequence # Add this import at the top
 
 @dataclass(kw_only=True)
 class Model_Config:
@@ -26,6 +27,9 @@ class Model_Config:
 
     rms_norm_eps:float = 1e-06
     vocab_padding_idx:int|None = None
+
+    #layerlist for FA preservation, priority over preserve_last_n_layers
+    preserve_layers_lst:list = field(default_factory=list)
 
 
 @dataclass(kw_only=True)
@@ -90,6 +94,13 @@ class Transformer_Config(Model_Config):
     conv_zero_init: bool = False
     use_qk_l2norm_in_kernel: bool = True
 
+    #Liger kernel related
+    liger_kernel_enabled: bool = False # Master switch
+    liger_patch_rms_norm: bool = False
+    liger_patch_swiglu: bool = False
+    liger_patch_rope: bool = False #turn off as this gives invalid memory access 
+    liger_use_loss_kernels: bool = False #not supported yet
+
 
 
 @dataclass(kw_only=True)
@@ -128,7 +139,7 @@ class Train_Config:
 
     load_model:str = 'auto'
     wandb:str = ''
-    proj_dir:str = '/work/hei/radlads/out/pths'
+    proj_dir:str = '/work/yanan/radlads/out/pths'
     proj_name:str = ''
     proj_suffix0:str = ''
     proj_suffix:str = '0'
@@ -175,7 +186,7 @@ class Train_Config:
     precision:str = 'bf16'
     accumulate_grad_batches:int = 1
 
-    data_file:str = ''
+    data_file:list = field(default_factory=list) #str = '' make it str or a list of strings
     validation_data_file:str = ''
     data_type:str = 'utf-8'
 

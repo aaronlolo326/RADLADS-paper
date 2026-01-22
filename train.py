@@ -165,7 +165,7 @@ if __name__ == "__main__":
     ########################################################################################################
 
     from src.trainer import train_callback
-    from src.dataset import MyDataset, MMapDataset
+    from src.dataset import MyDataset, MMapDataset, MyDatasetV2
 
     from src.lit import LightningModelWrapper
     from src.model import Transformer
@@ -356,7 +356,7 @@ if __name__ == "__main__":
         trainer.strategy.config["zero_optimization"]["allgather_bucket_size"] = config.train.ds_bucket_mb * 1000 * 1000
         trainer.strategy.config["zero_optimization"]["reduce_bucket_size"] = config.train.ds_bucket_mb * 1000 * 1000
 
-    train_data = MyDataset(config, trainer)
+    train_data = MyDatasetV2(config, trainer)  #change to a support multiple data bin files
     if config.train.validation_data_file != "":
         validation_data = MMapDataset(config.train.validation_data_file, config.model.ctx_len)
     config.model.vocab_size = train_data.vocab_size
