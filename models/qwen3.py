@@ -1711,6 +1711,7 @@ class Qwen3DecoderLayer(nn.Module):
 
         cmix = CMix_qwen3(args, layer_id)
 
+        # teacher: pass
         if args.preserve_layers_lst is not None and layer_id in args.preserve_layers_lst:
             self.self_attn = TMix_qwen3(args, layer_id)
         # if layer_id >= args.n_layer - args.preserve_last_n_layers:
@@ -2024,7 +2025,7 @@ class Model_qwen3(nn.Module): # Qwen3CausalLM
             return
 
         self.model = Qwen3Decoder(self.config)
-        import pdb;pdb.set_trace()
+        # import pdb;pdb.set_trace()
         if self.config.model.liger_kernel_enabled:
             self._apply_manual_liger_patch(self.model) 
         self.lm_head = nn.Linear(self.config.model.n_embd, self.config.model.vocab_size, bias=False)

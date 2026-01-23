@@ -1,5 +1,5 @@
 model:
-  ctx_len: 32768 
+  ctx_len: 32768
 
 train:
   wandb: qwen2rwkv
@@ -10,27 +10,27 @@ train:
 
   data_type: "binidx" 
   data_file: 
-    - "/work/yanan/data/radlads/prolong12-qwen3-8b-tokenized-32768" #data/minipile_qwen2" 
-    - "/work/yanan/data/radlads/dataset_mix_1.7B_20Btokens"
+    - "/work/hei/data/prolong12-qwen3-8b-tokenized-32768" #data/minipile_qwen2" 
+    - "/work/hei/data/dataset_mix_1.7B_20Btokens"
   my_exit_tokens: 49186545403  # 49186545403 for hf-decoded-text-source-shortmix tokens
   magic_prime: 1501043 #6409607 -- 2048, 801197 -- 16384, 400559 -- 32768
 
   optimizer: dsfusedadamw
   lr_wait: 0.8
-  lr_decay_type: cos
+  lr_decay_type: linear
   lr_init: 1e-5
-  lr_final: 1e-6
-  warmup_steps: 100
+  lr_final: 1e-5
+  warmup_steps: 50
   beta1: 0.9 
   beta2: 0.95 
   adam_eps: 1e-8 
   weight_decay: 0
 
-  devices: 8
-  num_nodes: 3
+  devices: 7
+  num_nodes: 1
   micro_bsz: 1 #2 # 12 originally w.2048 ctx
-  accumulate_grad_batches: 1 # 32 total bsz
-  strategy: deepspeed_stage_1 #fsdp #deepspeed_stage_1 # fsdp 
+  accumulate_grad_batches: 6 # 32 total bsz
+  strategy: deepspeed_stage_1 # fsdp 
   grad_cp: 1
   ds_bucket_mb: 200 # set to 2 for consumer GPUs, set to 200 for A100 / H100 (affects speed & vram usage)
 

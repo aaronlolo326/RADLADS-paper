@@ -1,0 +1,36 @@
+model:
+  ctx_len: 2048
+
+train:
+  wandb: qwen2rwkv
+  
+  proj_suffix: 4-2k
+  train_stage: 3
+  load_partial: 0
+
+  data_type: "binidx" 
+  data_file: "/work/hei/data/dataset_mix_1.7B_20Btokens" #data/minipile_qwen2" 
+  my_exit_tokens: 20000000000 #20896980731
+  magic_prime: 10203581
+
+  optimizer: dsfusedadamw
+  lr_wait: 0.8
+  lr_decay_type: linear
+  lr_init: 1e-5
+  lr_final: 1e-5
+  warmup_steps: 50
+  beta1: 0.9 
+  beta2: 0.95 
+  adam_eps: 1e-8 
+  weight_decay: 0
+
+  devices: 7
+  num_nodes: 1
+  micro_bsz: 12
+  accumulate_grad_batches: 1 # 32 total bsz
+  strategy: deepspeed_stage_1 # fsdp 
+  grad_cp: 1
+  ds_bucket_mb: 200 # set to 2 for consumer GPUs, set to 200 for A100 / H100 (affects speed & vram usage)
+
+  epoch_save: 1
+

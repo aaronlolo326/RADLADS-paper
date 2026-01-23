@@ -29,7 +29,8 @@ class Model_Config:
     vocab_padding_idx:int|None = None
 
     #layerlist for FA preservation, priority over preserve_last_n_layers
-    preserve_layers_lst:list = field(default_factory=list)
+    preserve_layers_lst: list|None = None
+    # field(default_factory=list)
 
 
 @dataclass(kw_only=True)
@@ -139,7 +140,7 @@ class Train_Config:
 
     load_model:str = 'auto'
     wandb:str = ''
-    proj_dir:str = '/work/yanan/radlads/out/pths'
+    proj_dir:str = '/work/hei/radlads/out/pths'
     proj_name:str = ''
     proj_suffix0:str = ''
     proj_suffix:str = '0'
