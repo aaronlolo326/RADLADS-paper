@@ -73,5 +73,5 @@ accelerate launch --main_process_port ${MAIN_PROCESS_PORT} -m lm_eval \
 
 
 
-# python ~/exp.py --gpus ${CUDA_VISIBLE_DEVICES}
+python ~/exp.py --gpus ${CUDA_VISIBLE_DEVICES}
 

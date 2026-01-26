@@ -78,7 +78,7 @@ class MyDatasetV2(Dataset):
         self.config = config
         self.trainer = trainer
 
-        assert config.train.data_type == "binidx"
+        assert config.train.data_type == "binidx", config.train.data_type
         self.vocab_size = config.model.vocab_size
         rank_zero_info(f"Current vocab size = {self.vocab_size} (make sure it's correct)")
 
@@ -104,7 +104,7 @@ class MyDatasetV2(Dataset):
         assert config.train.my_exit_tokens <= self.data_size
         assert MaybeIsPrime(config.train.magic_prime)
         assert config.train.magic_prime % 3 == 2
-        assert config.train.magic_prime / effective_slot > 0.99 and config.train.magic_prime / effective_slot <= 1
+        assert config.train.magic_prime / effective_slot > 0.99 and config.train.magic_prime / effective_slot <= 1, (config.train.magic_prime, effective_slot)
 
         rank_zero_info(
             f"ctx_len={self.ctx_len} req_len={self.req_len} "
