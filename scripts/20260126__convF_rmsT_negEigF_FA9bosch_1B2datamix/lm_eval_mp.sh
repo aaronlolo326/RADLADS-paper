@@ -54,7 +54,6 @@ accelerate launch --main_process_port ${MAIN_PROCESS_PORT} -m lm_eval \
    --batch_size 1 \
    --output_path $lm_eval_output_path \
    --log_samples \
-   # --gen_kwargs '{"max_new_tokens": 128}' \
    --seed 1234
 
 accelerate launch --main_process_port ${MAIN_PROCESS_PORT} -m lm_eval \
@@ -67,8 +66,8 @@ accelerate launch --main_process_port ${MAIN_PROCESS_PORT} -m lm_eval \
    --batch_size 1 \
    --output_path $lm_eval_output_path \
    --log_samples \
-   # --gen_kwargs '{"max_new_tokens": 128}' \
    --seed 1234
+   # --gen_kwargs '{"max_new_tokens": 128}' \
 
 
 
